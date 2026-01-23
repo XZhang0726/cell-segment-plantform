@@ -1,0 +1,28 @@
+# 开发工具依赖
+-r requirements.txt
+
+# 测试
+pytest>=7.0.0
+pytest-cov>=3.0.0
+pytest-mock>=3.6.0
+
+# 代码质量
+black>=22.0.0
+pylint>=2.12.0
+flake8>=4.0.0
+mypy>=0.950
+isort>=5.10.0
+
+# 文档
+sphinx>=4.5.0
+sphinx-rtd-theme>=1.0.0
+
+# Jupyter
+jupyter>=1.0.0
+ipykernel>=6.9.0
+
+# 模型管理
+mlflow>=2.0.0
+
+# 其他工具
+pre-commit>=2.17.0
