@@ -73,3 +73,7 @@ mlruns/
 # Temporary files
 *.tmp
 *.bak
+
+# Test output directories
+test_output/
+test_segmentation_output/
