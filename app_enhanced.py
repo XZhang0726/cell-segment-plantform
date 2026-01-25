@@ -21,6 +21,7 @@ from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 from skimage import measure
+import plotly.express as px
 
 # 添加项目根目录到路径
 project_root = Path(__file__).parent
@@ -28,6 +29,16 @@ sys.path.insert(0, str(project_root))
 
 from src.api.segmentation import CellSegmenter, SegmentationMethod
 from src.core.features import extract_cell_features, get_feature_statistics, extract_advanced_cell_features
+
+# 导入ML模块
+from src.ml.clustering import perform_kmeans, perform_dbscan, perform_hierarchical, perform_gmm, find_optimal_clusters
+from src.ml.dimensionality_reduction import apply_pca, apply_tsne, apply_umap
+from src.ml.feature_analysis import analyze_feature_importance
+from src.ml.anomaly_detection import (detect_isolation_forest, detect_lof,
+                                       detect_one_class_svm, detect_elliptic_envelope,
+                                       get_anomaly_statistics,
+                                       visualize_isolation_forest, visualize_lof,
+                                       visualize_one_class_svm, visualize_elliptic_envelope)
 
 # 检查GPU可用性
 try:
@@ -425,6 +436,14 @@ with col_help:
         - **提取单个细胞**: 自动提取每个细胞样本，支持机器学习训练数据准备
         - **最小细胞面积**: 过滤掉面积过小的噪声区域
 
+        #### 5. 机器学习分析
+        - **独立模块**: 在"🤖 机器学习分析"tab中上传细胞特征CSV文件
+        - **聚类分析**: K-means、DBSCAN、层次聚类、GMM，自动发现细胞亚群
+        - **异常检测**: Isolation Forest、LOF、One-Class SVM、Elliptic Envelope，识别异常形态细胞
+        - **降维可视化**: PCA、t-SNE、UMAP，2D可视化高维特征
+        - **结果导出**: 下载带聚类/异常标签的CSV文件，支持导出仅正常样本
+        - **CSV格式**: 需包含基础形态学特征（面积、圆度、长轴、短轴等）
+
         ### 使用技巧
         - **Cellpose深度学习**: 对于重叠或接触的细胞，推荐使用Cellpose方法，效果最佳
         - **模型选择**: cyto2适合大多数细胞质染色图像，nuclei适合细胞核染色图像
@@ -434,10 +453,11 @@ with col_help:
         - **批量处理**: 适合处理大量相似类型的细胞图像
         - **对比模式**: 不确定哪种方法最适合时，启用对比模式快速评估
         - **参数调整**: 根据图像特点调整方法参数以获得最佳效果
+        - **机器学习分析**: 完成特征提取后，可在"机器学习分析"tab上传CSV进行聚类分析
         """)
 
 # 创建标签页
-tab1, tab2 = st.tabs(["📤 图像分割", "📦 批量处理"])
+tab1, tab2, tab3 = st.tabs(["📤 图像分割", "📦 批量处理", "🤖 机器学习分析"])
 
 # ==================== 标签页1: 图像分割（整合单图和对比） ====================
 with tab1:
@@ -498,6 +518,9 @@ with tab1:
                 include_boundary = st.checkbox("边界复杂度特征", value=True, help="边界粗糙度、凹凸性分析")
                 include_advanced_shape = st.checkbox("高级形状特征", value=True, help="椭圆度、伸长度、分形维数等")
 
+        # 初始化变量，确保在所有模式下都存在
+        comp_methods = []
+
         if not comparison_mode:
             # 单一方法模式
             st.subheader("📐 分割方法")
@@ -546,7 +569,7 @@ with tab1:
                     use_normalize = st.checkbox("启用图像归一化", value=True,
                                                help="对图像进行归一化处理，可改善分割质量")
                     if use_normalize:
-                        tile_norm_blocksize = st.slider("归一化块大小", 0, 256, 0, 16,
+                        tile_norm_blocksize = st.slider("归一化块大小", 0, 256, 64, 16,
                                                        help="0表示全局归一化，>0表示分块归一化")
                         normalize = {"tile_norm_blocksize": tile_norm_blocksize}
                     else:
@@ -1230,4 +1253,779 @@ with tab2:
 
         else:
             st.info("👈 请在左侧上传多张细胞图像")
+
+# ==================== 标签页3: 机器学习分析（独立模块） ====================
+with tab3:
+    st.header("🤖 机器学习分析")
+    st.caption("上传细胞特征CSV文件进行无监督聚类分析")
+    st.info("💡 使用说明请查看页面顶部的 📖 使用说明")
+
+    st.markdown("---")
+
+    # CSV文件上传
+    col_upload, col_info = st.columns([2, 1])
+
+    with col_upload:
+        uploaded_csv = st.file_uploader(
+            "📁 上传细胞特征CSV文件",
+            type=["csv"],
+            key="ml_csv_upload",
+            help="上传从图像分割模块导出的细胞特征CSV文件"
+        )
+
+    with col_info:
+        if uploaded_csv is not None:
+            st.success("✅ 文件已上传")
+            st.info(f"文件名: {uploaded_csv.name}")
+
+    # 处理上传的CSV文件
+    if uploaded_csv is not None:
+        try:
+            # 读取CSV文件
+            ml_features_df = pd.read_csv(uploaded_csv)
+
+            # 验证CSV格式
+            required_cols = ['area_um2', 'perimeter_um', 'circularity']
+            missing_cols = [col for col in required_cols if col not in ml_features_df.columns]
+
+            if missing_cols:
+                st.error(f"❌ CSV文件格式不正确！缺少必需的列: {', '.join(missing_cols)}")
+                st.info("请确保CSV文件是从图像分割模块导出的细胞特征文件")
+            else:
+                # 显示数据概览
+                st.success(f"✅ CSV文件加载成功！共 {len(ml_features_df)} 个细胞")
+
+                # 数据预览
+                with st.expander("📊 数据预览", expanded=False):
+                    st.write(f"**数据维度**: {ml_features_df.shape[0]} 行 × {ml_features_df.shape[1]} 列")
+                    st.write("**前10行数据**:")
+                    st.dataframe(ml_features_df.head(10), use_container_width=True)
+
+                    # 显示特征列表
+                    feature_cols = [col for col in ml_features_df.columns if col not in
+                                   ['sequential_id', 'cell_id', 'centroid_x', 'centroid_y',
+                                    'bbox_min_row', 'bbox_min_col', 'bbox_max_row', 'bbox_max_col']]
+                    st.write(f"**可用特征** ({len(feature_cols)} 个):")
+                    st.write(", ".join(feature_cols))
+
+                st.markdown("---")
+
+                # 保存到session_state
+                st.session_state['ml_features_df'] = ml_features_df
+
+        except Exception as e:
+            st.error(f"❌ 读取CSV文件失败: {str(e)}")
+            st.info("请确保上传的是有效的CSV文件")
+
+    # 机器学习分析UI（只在有数据时显示）
+    if 'ml_features_df' in st.session_state and not st.session_state['ml_features_df'].empty:
+        ml_features_df = st.session_state['ml_features_df']
+
+        st.markdown("---")
+
+        # 分析类型选择
+        st.subheader("🔬 选择分析类型")
+        analysis_type = st.selectbox(
+            "请选择要执行的分析",
+            ["📊 聚类分析", "🔍 异常检测"],
+            key="ml_analysis_type",
+            help="聚类分析：自动发现细胞亚群；异常检测：识别形态异常的细胞"
+        )
+
+        st.markdown("---")
+
+        # 根据选择显示对应的分析模块
+        if analysis_type == "📊 聚类分析":
+            st.subheader("📊 聚类分析")
+
+            with st.expander("⚙️ 聚类参数设置", expanded=True):
+                # 聚类算法选择
+                col_algo, col_param = st.columns([1, 2])
+
+                with col_algo:
+                    ml_clustering_method = st.selectbox(
+                        "聚类算法",
+                        ["K-means", "DBSCAN", "层次聚类", "GMM"],
+                        key="ml_clustering_method",
+                        help="选择聚类算法。K-means适合球形簇，DBSCAN适合任意形状，层次聚类生成树状图，GMM是概率聚类"
+                    )
+
+                with col_param:
+                    # 根据选择的算法显示不同的参数控件
+                    if ml_clustering_method == "K-means":
+                        col_k, col_auto = st.columns(2)
+                        with col_k:
+                            ml_n_clusters = st.number_input("聚类数量", min_value=2, max_value=10, value=3, step=1, key="ml_n_clusters")
+                        with col_auto:
+                            ml_auto_k = st.checkbox("自动检测最佳k值", value=False, key="ml_auto_k", help="使用轮廓系数自动寻找最佳聚类数量")
+
+                    elif ml_clustering_method == "DBSCAN":
+                        col_eps, col_min = st.columns(2)
+                        with col_eps:
+                            ml_eps = st.number_input("邻域半径(eps)", min_value=0.1, max_value=5.0, value=0.5, step=0.1, key="ml_eps",
+                                                    help="留空则自动估计")
+                            ml_auto_eps = st.checkbox("自动估计eps", value=True, key="ml_auto_eps")
+                        with col_min:
+                            ml_min_samples = st.number_input("最小样本数", min_value=2, max_value=20, value=5, step=1, key="ml_min_samples")
+
+                    elif ml_clustering_method == "层次聚类":
+                        col_k, col_link = st.columns(2)
+                        with col_k:
+                            ml_n_clusters = st.number_input("聚类数量", min_value=2, max_value=10, value=3, step=1, key="ml_n_clusters_hier")
+                        with col_link:
+                            ml_linkage = st.selectbox("链接方法", ["ward", "complete", "average", "single"], key="ml_linkage")
+
+                    elif ml_clustering_method == "GMM":
+                        ml_n_components = st.number_input("高斯分量数", min_value=2, max_value=10, value=3, step=1, key="ml_n_components")
+
+                # 执行聚类按钮
+                if st.button("🚀 执行聚类分析", type="primary", use_container_width=True, key="ml_cluster_button"):
+                    with st.spinner("正在执行聚类分析..."):
+                        try:
+                            # 执行聚类
+                            if ml_clustering_method == "K-means":
+                                if ml_auto_k:
+                                    # 自动检测最佳k值
+                                    optimal_results = find_optimal_clusters(ml_features_df, max_k=10, method='kmeans')
+                                    ml_n_clusters = optimal_results['best_k']
+                                    st.info(f"🎯 自动检测到最佳聚类数量: k={ml_n_clusters}")
+
+                                labels, info = perform_kmeans(ml_features_df, n_clusters=ml_n_clusters)
+
+                            elif ml_clustering_method == "DBSCAN":
+                                eps_val = None if ml_auto_eps else ml_eps
+                                labels, info = perform_dbscan(ml_features_df, eps=eps_val, min_samples=ml_min_samples)
+
+                            elif ml_clustering_method == "层次聚类":
+                                labels, info = perform_hierarchical(ml_features_df, n_clusters=ml_n_clusters, linkage=ml_linkage)
+
+                            elif ml_clustering_method == "GMM":
+                                labels, info = perform_gmm(ml_features_df, n_components=ml_n_components)
+
+                            # 保存聚类结果到session_state
+                            st.session_state['ml_cluster_labels'] = labels
+                            st.session_state['ml_cluster_info'] = info
+
+                            # 将聚类标签添加到features_df
+                            ml_features_df_clustered = ml_features_df.copy()
+                            ml_features_df_clustered['cluster'] = labels
+                            st.session_state['ml_features_df_clustered'] = ml_features_df_clustered
+
+                            st.success(f"✅ 聚类分析完成！")
+
+                            # 显示聚类质量指标
+                            st.write("**聚类质量指标**")
+                            col_m1, col_m2, col_m3 = st.columns(3)
+
+                            with col_m1:
+                                st.metric("轮廓系数", f"{info['silhouette_score']:.3f}",
+                                         help="范围[-1,1]，越接近1表示聚类质量越好")
+                            with col_m2:
+                                st.metric("Davies-Bouldin指数", f"{info['davies_bouldin_score']:.3f}",
+                                         help="越小越好，表示簇间分离度")
+                            with col_m3:
+                                st.metric("Calinski-Harabasz指数", f"{info['calinski_harabasz_score']:.1f}",
+                                         help="越大越好，表示簇间方差与簇内方差的比值")
+
+                            # 显示聚类统计
+                            st.write("**聚类统计**")
+                            n_clusters_found = len(set(labels)) - (1 if -1 in labels else 0)
+                            st.write(f"- 发现 **{n_clusters_found}** 个聚类")
+
+                            if -1 in labels:
+                                n_noise = list(labels).count(-1)
+                                st.write(f"- 噪声点: **{n_noise}** 个")
+
+                            # 每个聚类的细胞数量
+                            cluster_counts = pd.Series(labels).value_counts().sort_index()
+                            for cluster_id, count in cluster_counts.items():
+                                if cluster_id != -1:
+                                    st.write(f"- 聚类 {cluster_id}: **{count}** 个细胞")
+
+                        except Exception as e:
+                            st.error(f"❌ 聚类分析失败: {str(e)}")
+
+            # 可视化section（只在有聚类结果时显示）
+            if 'ml_cluster_labels' in st.session_state and 'ml_features_df' in st.session_state:
+                st.markdown("---")
+                with st.expander("📊 聚类可视化", expanded=True):
+                    st.caption("使用降维方法将高维特征投影到2D空间进行可视化")
+
+                    # 降维方法选择
+                    col_viz_method, col_viz_param = st.columns([1, 2])
+
+                    with col_viz_method:
+                        ml_viz_method = st.selectbox(
+                            "降维方法",
+                            ["PCA", "t-SNE", "UMAP"],
+                            key="ml_viz_method",
+                            help="PCA: 快速线性降维; t-SNE: 保留局部结构; UMAP: 保留全局和局部结构"
+                        )
+
+                    with col_viz_param:
+                        # 根据选择的方法显示不同的参数
+                        if ml_viz_method == "t-SNE":
+                            col_perp, col_iter = st.columns(2)
+                            with col_perp:
+                                ml_perplexity = st.slider("困惑度(perplexity)", 5, 50, 30, 5, key="ml_perplexity",
+                                                          help="控制局部和全局结构的平衡")
+                            with col_iter:
+                                ml_n_iter = st.slider("迭代次数", 250, 2000, 1000, 250, key="ml_n_iter")
+                        elif ml_viz_method == "UMAP":
+                            col_neighbors, col_dist = st.columns(2)
+                            with col_neighbors:
+                                ml_n_neighbors = st.slider("邻居数量", 5, 50, 15, 5, key="ml_n_neighbors",
+                                                           help="控制局部结构的保留程度")
+                            with col_dist:
+                                ml_min_dist = st.slider("最小距离", 0.0, 0.99, 0.1, 0.05, key="ml_min_dist",
+                                                        help="控制点之间的紧密程度")
+
+                # 执行降维和可视化
+                if st.button("🎨 生成可视化", type="secondary", use_container_width=True, key="ml_viz_button"):
+                    with st.spinner(f"正在执行{ml_viz_method}降维..."):
+                        try:
+                            ml_features_df = st.session_state['ml_features_df']
+                            ml_labels = st.session_state['ml_cluster_labels']
+
+                            # 执行降维
+                            if ml_viz_method == "PCA":
+                                components, _, _ = apply_pca(ml_features_df, n_components=2)
+                            elif ml_viz_method == "t-SNE":
+                                components, _ = apply_tsne(ml_features_df, n_components=2,
+                                                          perplexity=ml_perplexity, n_iter=ml_n_iter)
+                            elif ml_viz_method == "UMAP":
+                                components, _ = apply_umap(ml_features_df, n_components=2,
+                                                          n_neighbors=ml_n_neighbors, min_dist=ml_min_dist)
+
+                            # 创建可视化DataFrame
+                            viz_df = pd.DataFrame({
+                                'component_1': components[:, 0],
+                                'component_2': components[:, 1],
+                                'cluster': ml_labels.astype(str)
+                            })
+
+                            # 添加一些特征用于hover显示
+                            if 'sequential_id' in ml_features_df.columns:
+                                viz_df['sequential_id'] = ml_features_df['sequential_id'].values
+                            if 'area_um2' in ml_features_df.columns:
+                                viz_df['area_um2'] = ml_features_df['area_um2'].values
+                            if 'circularity' in ml_features_df.columns:
+                                viz_df['circularity'] = ml_features_df['circularity'].values
+
+                            # 创建交互式散点图
+                            fig = px.scatter(
+                                viz_df,
+                                x='component_1',
+                                y='component_2',
+                                color='cluster',
+                                hover_data=['sequential_id', 'area_um2', 'circularity'] if 'sequential_id' in viz_df.columns else None,
+                                title=f'细胞聚类可视化 ({ml_viz_method})',
+                                labels={'component_1': f'{ml_viz_method}1', 'component_2': f'{ml_viz_method}2', 'cluster': '聚类'},
+                                color_discrete_sequence=px.colors.qualitative.Set2
+                            )
+
+                            fig.update_traces(marker=dict(size=8, opacity=0.7))
+                            fig.update_layout(height=600)
+
+                            st.plotly_chart(fig, use_container_width=True)
+
+                            st.success(f"✅ {ml_viz_method}可视化完成！")
+
+                            # 下载按钮
+                            st.write("**下载可视化图片**")
+                            col_dl_cluster1, col_dl_cluster2, col_dl_cluster3 = st.columns(3)
+
+                            with col_dl_cluster1:
+                                # HTML格式（交互式）
+                                html_buffer = io.StringIO()
+                                fig.write_html(html_buffer)
+                                html_str = html_buffer.getvalue()
+                                st.download_button(
+                                    "📥 下载HTML（交互式）",
+                                    data=html_str,
+                                    file_name=f"cluster_viz_{ml_viz_method}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
+                                    mime="text/html",
+                                    use_container_width=True,
+                                    help="下载交互式HTML文件，可在浏览器中打开"
+                                )
+
+                            with col_dl_cluster2:
+                                # PNG格式
+                                try:
+                                    png_bytes = fig.to_image(format="png", width=1200, height=800)
+                                    st.download_button(
+                                        "📥 下载PNG",
+                                        data=png_bytes,
+                                        file_name=f"cluster_viz_{ml_viz_method}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
+                                        mime="image/png",
+                                        use_container_width=True
+                                    )
+                                except Exception as e:
+                                    st.caption("⚠️ PNG导出需要安装kaleido包")
+
+                            with col_dl_cluster3:
+                                # SVG格式
+                                try:
+                                    svg_bytes = fig.to_image(format="svg", width=1200, height=800)
+                                    st.download_button(
+                                        "📥 下载SVG",
+                                        data=svg_bytes,
+                                        file_name=f"cluster_viz_{ml_viz_method}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.svg",
+                                        mime="image/svg+xml",
+                                        use_container_width=True
+                                    )
+                                except Exception as e:
+                                    st.caption("⚠️ SVG导出需要安装kaleido包")
+
+                        except Exception as e:
+                            st.error(f"❌ 可视化失败: {str(e)}")
+
+        elif analysis_type == "🔍 异常检测":
+            st.subheader("🔍 异常检测")
+            st.caption("使用无监督学习算法识别形态学参数异常的细胞样本")
+
+            # 异常检测算法选择
+            col_anomaly_algo, col_anomaly_param = st.columns([1, 2])
+
+            with col_anomaly_algo:
+                ml_anomaly_method = st.selectbox(
+                    "异常检测算法",
+                    ["Isolation Forest", "LOF", "One-Class SVM", "Elliptic Envelope"],
+                    key="ml_anomaly_method",
+                    help="选择异常检测算法。Isolation Forest适合高维数据，LOF基于密度，One-Class SVM学习正常边界，Elliptic Envelope假设高斯分布"
+                )
+
+            with col_anomaly_param:
+                # 根据选择的算法显示不同的参数控件
+                if ml_anomaly_method == "Isolation Forest":
+                    ml_contamination = st.slider(
+                        "异常比例(contamination)",
+                        0.01, 0.5, 0.1, 0.01,
+                        key="ml_contamination_if",
+                        help="预期异常样本的比例"
+                    )
+
+                elif ml_anomaly_method == "LOF":
+                    col_cont, col_neigh = st.columns(2)
+                    with col_cont:
+                        ml_contamination = st.slider(
+                            "异常比例",
+                            0.01, 0.5, 0.1, 0.01,
+                            key="ml_contamination_lof"
+                        )
+                    with col_neigh:
+                        ml_n_neighbors_lof = st.slider(
+                            "邻居数量",
+                            5, 50, 20, 5,
+                            key="ml_n_neighbors_lof",
+                            help="用于计算局部密度的邻居数量"
+                        )
+
+                elif ml_anomaly_method == "One-Class SVM":
+                    col_nu, col_kernel = st.columns(2)
+                    with col_nu:
+                        ml_nu = st.slider(
+                            "异常上界(nu)",
+                            0.01, 0.5, 0.1, 0.01,
+                            key="ml_nu",
+                            help="异常样本比例的上界"
+                        )
+                    with col_kernel:
+                        ml_kernel = st.selectbox(
+                            "核函数",
+                            ["rbf", "linear", "poly", "sigmoid"],
+                            key="ml_kernel"
+                        )
+
+                elif ml_anomaly_method == "Elliptic Envelope":
+                    ml_contamination = st.slider(
+                        "异常比例(contamination)",
+                        0.01, 0.5, 0.1, 0.01,
+                        key="ml_contamination_ee",
+                        help="预期异常样本的比例"
+                    )
+
+            # 执行异常检测按钮
+            if st.button("🚀 执行异常检测", type="primary", use_container_width=True, key="ml_anomaly_button"):
+                with st.spinner("正在执行异常检测..."):
+                    try:
+                        # 执行异常检测
+                        if ml_anomaly_method == "Isolation Forest":
+                            labels, info = detect_isolation_forest(ml_features_df, contamination=ml_contamination)
+
+                        elif ml_anomaly_method == "LOF":
+                            labels, info = detect_lof(ml_features_df, contamination=ml_contamination,
+                                                     n_neighbors=ml_n_neighbors_lof)
+
+                        elif ml_anomaly_method == "One-Class SVM":
+                            labels, info = detect_one_class_svm(ml_features_df, nu=ml_nu, kernel=ml_kernel)
+
+                        elif ml_anomaly_method == "Elliptic Envelope":
+                            labels, info = detect_elliptic_envelope(ml_features_df, contamination=ml_contamination)
+
+                        # 保存异常检测结果到session_state
+                        st.session_state['ml_anomaly_labels'] = labels
+                        st.session_state['ml_anomaly_info'] = info
+
+                        # 将异常标签添加到features_df
+                        ml_features_df_anomaly = ml_features_df.copy()
+                        ml_features_df_anomaly['anomaly'] = labels
+                        ml_features_df_anomaly['anomaly_label'] = ml_features_df_anomaly['anomaly'].map({1: '正常', -1: '异常'})
+                        st.session_state['ml_features_df_anomaly'] = ml_features_df_anomaly
+
+                        st.success(f"✅ 异常检测完成！")
+
+                        # 显示异常检测结果
+                        st.write("**异常检测结果**")
+                        col_r1, col_r2, col_r3 = st.columns(3)
+
+                        with col_r1:
+                            st.metric("正常样本", f"{info['n_normal']} 个",
+                                     help="被识别为正常的细胞数量")
+                        with col_r2:
+                            st.metric("异常样本", f"{info['n_anomalies']} 个",
+                                     help="被识别为异常的细胞数量")
+                        with col_r3:
+                            st.metric("异常比例", f"{info['anomaly_ratio']*100:.1f}%",
+                                     help="异常样本占总样本的比例")
+
+                    except Exception as e:
+                        st.error(f"❌ 异常检测失败: {str(e)}")
+
+            # 异常检测可视化和统计（只在有异常检测结果时显示）
+            if 'ml_anomaly_labels' in st.session_state and 'ml_features_df' in st.session_state:
+                st.markdown("---")
+                with st.expander("📊 异常检测可视化与统计", expanded=True):
+                    st.caption("可视化异常样本分布并分析异常特征")
+
+                    # 异常统计分析
+                    st.write("**异常特征统计**")
+                    st.caption("对比正常样本和异常样本的特征差异")
+
+                    try:
+                        ml_anomaly_labels = st.session_state['ml_anomaly_labels']
+                        ml_features_df = st.session_state['ml_features_df']
+
+                        # 获取异常统计
+                        anomaly_stats = get_anomaly_statistics(ml_features_df, ml_anomaly_labels)
+
+                        # 显示前10个差异最大的特征
+                        st.dataframe(
+                            anomaly_stats.head(10),
+                            use_container_width=True,
+                            hide_index=True
+                        )
+
+                        st.caption("💡 difference列表示正常样本和异常样本在该特征上的均值差异，值越大表示该特征越能区分正常和异常样本")
+
+                    except Exception as e:
+                        st.error(f"❌ 统计分析失败: {str(e)}")
+
+                st.markdown("---")
+
+                # 算法可视化
+                st.write("**算法可视化**")
+                st.caption("展示异常检测算法的工作原理和检测结果")
+
+                try:
+                    ml_anomaly_info = st.session_state['ml_anomaly_info']
+                    ml_anomaly_labels = st.session_state['ml_anomaly_labels']
+                    ml_features_df = st.session_state['ml_features_df']
+
+                    # 获取算法信息
+                    method = ml_anomaly_info['method']
+                    scores = ml_anomaly_info['scores']
+                    scaler = ml_anomaly_info['scaler']
+                    feature_cols = ml_anomaly_info['feature_cols']
+
+                    # 预处理特征（使用保存的scaler）
+                    features = ml_features_df[feature_cols].values
+                    features_scaled = scaler.transform(features)
+
+                    # 根据算法类型调用相应的可视化函数
+                    if method == "Isolation Forest":
+                        fig = visualize_isolation_forest(features_scaled, ml_anomaly_labels, scores, ml_anomaly_info)
+                    elif method == "Local Outlier Factor":
+                        fig = visualize_lof(features_scaled, ml_anomaly_labels, scores, ml_anomaly_info)
+                    elif method == "One-Class SVM":
+                        fig = visualize_one_class_svm(features_scaled, ml_anomaly_labels, scores, ml_anomaly_info)
+                    elif method == "Elliptic Envelope":
+                        fig = visualize_elliptic_envelope(features_scaled, ml_anomaly_labels, scores, ml_anomaly_info)
+
+                    # 显示可视化 - 根据数据量智能选择格式
+                    n_samples = len(ml_features_df)
+                    if n_samples < 10000:
+                        # 数据点少于10000，使用SVG矢量图（超高清，可无限放大）
+                        svg_buffer = io.BytesIO()
+                        fig.savefig(svg_buffer, format='svg', bbox_inches='tight')
+                        svg_buffer.seek(0)
+                        svg_str = svg_buffer.getvalue().decode('utf-8')
+                        st.components.v1.html(svg_str, height=1800, scrolling=True)
+                        st.caption("💡 左上：样本分布（PCA降维）| 右上：异常分数分布 | 左下：异常分数热图 | 右下：统计信息")
+                        st.info(f"🎨 当前使用SVG矢量图显示（{n_samples}个样本），支持无限放大而不失真")
+                    else:
+                        # 数据点多于10000，使用PNG栅格图（避免浏览器卡顿）
+                        st.pyplot(fig)
+                        st.caption("💡 左上：样本分布（PCA降维）| 右上：异常分数分布 | 左下：异常分数热图 | 右下：统计信息")
+                        st.info(f"📊 当前使用PNG栅格图显示（{n_samples}个样本），避免浏览器卡顿。下载SVG格式可获得矢量图")
+
+                    # 下载按钮
+                    st.write("**下载可视化图片**")
+                    col_dl1, col_dl2, col_dl3 = st.columns(3)
+
+                    with col_dl1:
+                        # PNG格式
+                        png_buffer = io.BytesIO()
+                        fig.savefig(png_buffer, format='png', dpi=300, bbox_inches='tight')
+                        png_buffer.seek(0)
+                        st.download_button(
+                            "📥 下载PNG",
+                            data=png_buffer,
+                            file_name=f"anomaly_{method.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
+                            mime="image/png",
+                            use_container_width=True
+                        )
+
+                    with col_dl2:
+                        # SVG格式
+                        svg_buffer = io.BytesIO()
+                        fig.savefig(svg_buffer, format='svg', bbox_inches='tight')
+                        svg_buffer.seek(0)
+                        st.download_button(
+                            "📥 下载SVG",
+                            data=svg_buffer,
+                            file_name=f"anomaly_{method.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.svg",
+                            mime="image/svg+xml",
+                            use_container_width=True
+                        )
+
+                    with col_dl3:
+                        # PDF格式
+                        pdf_buffer = io.BytesIO()
+                        fig.savefig(pdf_buffer, format='pdf', bbox_inches='tight')
+                        pdf_buffer.seek(0)
+                        st.download_button(
+                            "📥 下载PDF",
+                            data=pdf_buffer,
+                            file_name=f"anomaly_{method.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                            mime="application/pdf",
+                            use_container_width=True
+                        )
+
+                except Exception as e:
+                    st.error(f"❌ 算法可视化失败: {str(e)}")
+
+                st.markdown("---")
+
+                # 降维可视化
+                st.write("**异常样本可视化**")
+                col_viz_method_anomaly, col_viz_param_anomaly = st.columns([1, 2])
+
+                with col_viz_method_anomaly:
+                    ml_viz_method_anomaly = st.selectbox(
+                        "降维方法",
+                        ["PCA", "t-SNE", "UMAP"],
+                        key="ml_viz_method_anomaly",
+                        help="使用降维方法将高维特征投影到2D空间"
+                    )
+
+                with col_viz_param_anomaly:
+                    if ml_viz_method_anomaly == "t-SNE":
+                        ml_perplexity_anomaly = st.slider(
+                            "困惑度(perplexity)",
+                            5, 50, 30, 5,
+                            key="ml_perplexity_anomaly"
+                        )
+                    elif ml_viz_method_anomaly == "UMAP":
+                        col_n, col_d = st.columns(2)
+                        with col_n:
+                            ml_n_neighbors_anomaly = st.slider(
+                                "邻居数量",
+                                5, 50, 15, 5,
+                                key="ml_n_neighbors_anomaly"
+                            )
+                        with col_d:
+                            ml_min_dist_anomaly = st.slider(
+                                "最小距离",
+                                0.0, 0.99, 0.1, 0.05,
+                                key="ml_min_dist_anomaly"
+                            )
+
+                # 执行可视化
+                if st.button("🎨 生成异常检测可视化", type="secondary", use_container_width=True, key="ml_viz_anomaly_button"):
+                    with st.spinner(f"正在执行{ml_viz_method_anomaly}降维..."):
+                        try:
+                            ml_features_df = st.session_state['ml_features_df']
+                            ml_anomaly_labels = st.session_state['ml_anomaly_labels']
+
+                            # 执行降维
+                            if ml_viz_method_anomaly == "PCA":
+                                components, _, _ = apply_pca(ml_features_df, n_components=2)
+                            elif ml_viz_method_anomaly == "t-SNE":
+                                components, _ = apply_tsne(ml_features_df, n_components=2,
+                                                          perplexity=ml_perplexity_anomaly, n_iter=1000)
+                            elif ml_viz_method_anomaly == "UMAP":
+                                components, _ = apply_umap(ml_features_df, n_components=2,
+                                                          n_neighbors=ml_n_neighbors_anomaly,
+                                                          min_dist=ml_min_dist_anomaly)
+
+                            # 创建可视化DataFrame
+                            viz_df_anomaly = pd.DataFrame({
+                                'component_1': components[:, 0],
+                                'component_2': components[:, 1],
+                                'anomaly_label': ml_anomaly_labels
+                            })
+                            viz_df_anomaly['status'] = viz_df_anomaly['anomaly_label'].map({1: '正常', -1: '异常'})
+
+                            # 添加特征用于hover
+                            if 'sequential_id' in ml_features_df.columns:
+                                viz_df_anomaly['sequential_id'] = ml_features_df['sequential_id'].values
+                            if 'area_um2' in ml_features_df.columns:
+                                viz_df_anomaly['area_um2'] = ml_features_df['area_um2'].values
+                            if 'circularity' in ml_features_df.columns:
+                                viz_df_anomaly['circularity'] = ml_features_df['circularity'].values
+
+                            # 创建交互式散点图
+                            fig = px.scatter(
+                                viz_df_anomaly,
+                                x='component_1',
+                                y='component_2',
+                                color='status',
+                                hover_data=['sequential_id', 'area_um2', 'circularity'] if 'sequential_id' in viz_df_anomaly.columns else None,
+                                title=f'异常检测可视化 ({ml_viz_method_anomaly})',
+                                labels={'component_1': f'{ml_viz_method_anomaly}1',
+                                       'component_2': f'{ml_viz_method_anomaly}2',
+                                       'status': '样本状态'},
+                                color_discrete_map={'正常': '#2ecc71', '异常': '#e74c3c'}
+                            )
+
+                            fig.update_traces(marker=dict(size=8, opacity=0.7))
+                            fig.update_layout(height=600)
+
+                            st.plotly_chart(fig, use_container_width=True)
+
+                            st.success(f"✅ {ml_viz_method_anomaly}可视化完成！")
+
+                            # 下载按钮
+                            st.write("**下载可视化图片**")
+                            col_dl_plotly1, col_dl_plotly2, col_dl_plotly3 = st.columns(3)
+
+                            with col_dl_plotly1:
+                                # HTML格式（交互式）
+                                html_buffer = io.StringIO()
+                                fig.write_html(html_buffer)
+                                html_str = html_buffer.getvalue()
+                                st.download_button(
+                                    "📥 下载HTML（交互式）",
+                                    data=html_str,
+                                    file_name=f"anomaly_viz_{ml_viz_method_anomaly}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
+                                    mime="text/html",
+                                    use_container_width=True,
+                                    help="下载交互式HTML文件，可在浏览器中打开"
+                                )
+
+                            with col_dl_plotly2:
+                                # PNG格式
+                                try:
+                                    png_bytes = fig.to_image(format="png", width=1200, height=800)
+                                    st.download_button(
+                                        "📥 下载PNG",
+                                        data=png_bytes,
+                                        file_name=f"anomaly_viz_{ml_viz_method_anomaly}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
+                                        mime="image/png",
+                                        use_container_width=True
+                                    )
+                                except Exception as e:
+                                    st.caption("⚠️ PNG导出需要安装kaleido包")
+
+                            with col_dl_plotly3:
+                                # SVG格式
+                                try:
+                                    svg_bytes = fig.to_image(format="svg", width=1200, height=800)
+                                    st.download_button(
+                                        "📥 下载SVG",
+                                        data=svg_bytes,
+                                        file_name=f"anomaly_viz_{ml_viz_method_anomaly}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.svg",
+                                        mime="image/svg+xml",
+                                        use_container_width=True
+                                    )
+                                except Exception as e:
+                                    st.caption("⚠️ SVG导出需要安装kaleido包")
+
+                        except Exception as e:
+                            st.error(f"❌ 可视化失败: {str(e)}")
+
+        # 结果导出section（只在有聚类或异常检测结果时显示）
+        if 'ml_features_df_clustered' in st.session_state or 'ml_features_df_anomaly' in st.session_state:
+            st.markdown("---")
+            st.subheader("💾 导出结果")
+
+            # 聚类结果导出
+            if 'ml_features_df_clustered' in st.session_state:
+                ml_features_df_clustered = st.session_state['ml_features_df_clustered']
+
+                col_export1, col_export2 = st.columns(2)
+
+                with col_export1:
+                    # 导出带聚类标签的CSV
+                    csv_data = ml_features_df_clustered.to_csv(index=False)
+                    st.download_button(
+                        "📥 下载带聚类标签的CSV",
+                        data=csv_data,
+                        file_name=f"clustered_features_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        help="下载包含聚类标签的完整特征数据"
+                    )
+
+                with col_export2:
+                    # 显示数据预览
+                    st.info(f"📊 聚类数据: {len(ml_features_df_clustered)} 个细胞，{len(ml_features_df_clustered.columns)} 个特征列")
+
+            # 异常检测结果导出
+            if 'ml_features_df_anomaly' in st.session_state:
+                ml_features_df_anomaly = st.session_state['ml_features_df_anomaly']
+
+                col_export3, col_export4 = st.columns(2)
+
+                with col_export3:
+                    # 导出带异常标签的CSV
+                    csv_data_anomaly = ml_features_df_anomaly.to_csv(index=False)
+                    st.download_button(
+                        "📥 下载带异常标签的CSV",
+                        data=csv_data_anomaly,
+                        file_name=f"anomaly_features_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        help="下载包含异常检测标签的完整特征数据"
+                    )
+
+                with col_export4:
+                    # 显示数据预览
+                    n_normal = (ml_features_df_anomaly['anomaly'] == 1).sum()
+                    n_anomaly = (ml_features_df_anomaly['anomaly'] == -1).sum()
+                    st.info(f"📊 异常检测数据: {len(ml_features_df_anomaly)} 个细胞 (正常: {n_normal}, 异常: {n_anomaly})")
+
+                # 导出仅正常样本的CSV
+                st.write("")
+                col_export5, col_export6 = st.columns(2)
+
+                with col_export5:
+                    # 导出仅正常样本
+                    ml_features_df_normal = ml_features_df_anomaly[ml_features_df_anomaly['anomaly'] == 1].copy()
+                    csv_data_normal = ml_features_df_normal.to_csv(index=False)
+                    st.download_button(
+                        "✅ 下载仅正常样本的CSV",
+                        data=csv_data_normal,
+                        file_name=f"normal_features_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        help="下载仅包含正常样本的特征数据（排除异常样本）"
+                    )
+
+                with col_export6:
+                    st.caption(f"💡 正常样本数据包含 {len(ml_features_df_normal)} 个细胞（已排除 {n_anomaly} 个异常样本）")
+
+    else:
+        st.info("👆 请上传细胞特征CSV文件开始分析")
 
