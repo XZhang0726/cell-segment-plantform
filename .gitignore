@@ -77,3 +77,13 @@ mlruns/
 # Test output directories
 test_output/
 test_segmentation_output/
+
+# Segmentation result directories
+cell_segmentation_results/
+optimized_segmentation_results/
+
+# Example data (may contain large files)
+examples/
+
+# Temporary files
+nul

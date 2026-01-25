@@ -29,3 +29,11 @@ pyyaml>=6.0
 
 # 日志
 loguru>=0.6.0
+
+# UI界面
+streamlit>=1.28.0
+
+# 深度学习细胞分割
+cellpose>=2.2.0
+torch>=2.0.0
+torchvision>=0.15.0
