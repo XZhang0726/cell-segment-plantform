@@ -26,6 +26,7 @@ env/
 ENV/
 .venv/
 env_cellvit/
+env_cellsam/
 
 # IDE
 .vscode/
@@ -58,6 +59,7 @@ data/results/*
 models/*.pth
 models/*.pt
 models/*.onnx
+models/sam/
 !models/.gitkeep
 
 # Logs

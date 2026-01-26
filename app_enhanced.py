@@ -349,7 +349,8 @@ def segment_single_image(image_np, method, params, preprocess_options, postproce
         "分水岭算法": SegmentationMethod.WATERSHED,
         "Canny边缘检测": SegmentationMethod.EDGE_CANNY,
         "Cellpose深度学习": SegmentationMethod.CELLPOSE,
-        "CellViT深度学习": SegmentationMethod.CELLVIT
+        "CellViT深度学习": SegmentationMethod.CELLVIT,
+        "CellSAM深度学习": SegmentationMethod.CELLSAM
     }
 
     seg_method = method_map[method]
@@ -370,7 +371,7 @@ def segment_single_image(image_np, method, params, preprocess_options, postproce
         is_labeled_mask = len(unique_labels) > 2  # 超过2个值说明是标签掩码（不只是0和1或0和255）
 
         if is_labeled_mask:
-            # 对于实例分割掩码（CellViT、Cellpose等），跳过形态学闭运算
+            # 对于实例分割掩码（CellViT、CellSAM、Cellpose等），跳过形态学闭运算
             # 因为它会破坏实例标签，导致细胞边界框错误
             from loguru import logger
             logger.warning("[后处理] 检测到实例分割掩码，跳过形态学闭运算以保护标签完整性")
@@ -628,7 +629,7 @@ with tab1:
             st.subheader("📐 分割方法")
             method = st.selectbox(
                 "选择方法",
-                ["Otsu阈值", "自适应阈值", "分水岭算法", "Canny边缘检测", "Cellpose深度学习", "CellViT深度学习"],
+                ["Otsu阈值", "自适应阈值", "分水岭算法", "Canny边缘检测", "Cellpose深度学习", "CellViT深度学习", "CellSAM深度学习"],
                 index=4  # 默认选择Cellpose深度学习
             )
 
@@ -709,6 +710,30 @@ with tab1:
                     st.info("ℹ️ GPU不可用，将使用CPU处理")
 
                 params = {"model_type": model_type, "target_size": target_size, "use_gpu": use_gpu}
+            elif method == "CellSAM深度学习":
+                st.write("**方法参数**")
+
+                # 提示信息
+                st.info("ℹ️ CellSAM直接在当前环境中运行。首次使用需要下载模型文件到 models/sam/ 目录")
+
+                model_type = st.selectbox("模型类型", ["vit_b", "vit_l", "vit_h"],
+                                         help="vit_b: 基础模型(91M参数), vit_l: 大模型(308M), vit_h: 超大模型(636M)")
+                points_per_side = st.slider("提示点密度", 16, 64, 32, 8,
+                                           help="每边生成的提示点数量。较大的值可检测更多细胞，但处理更慢。推荐32")
+
+                # GPU选项
+                if GPU_AVAILABLE and GPU_COMPATIBLE:
+                    use_gpu = st.checkbox(f"🚀 使用GPU加速 ({GPU_NAME})", value=True,
+                                         help="CellSAM推荐使用GPU（需要4GB+ VRAM）")
+                elif GPU_AVAILABLE and not GPU_COMPATIBLE:
+                    use_gpu = False
+                    st.error(f"⚠️ GPU不兼容: {GPU_WARNING}")
+                    st.info("💡 将使用CPU模式处理（速度较慢）")
+                else:
+                    use_gpu = False
+                    st.info("ℹ️ GPU不可用，将使用CPU处理")
+
+                params = {"model_type": model_type, "points_per_side": points_per_side, "use_gpu": use_gpu}
             else:
                 params = {}
         else:
@@ -1126,7 +1151,7 @@ with tab2:
         # 分割方法
         batch_method = st.selectbox(
             "分割方法",
-            ["Otsu阈值", "自适应阈值", "分水岭算法", "Canny边缘检测", "Cellpose深度学习", "CellViT深度学习"],
+            ["Otsu阈值", "自适应阈值", "分水岭算法", "Canny边缘检测", "Cellpose深度学习", "CellViT深度学习", "CellSAM深度学习"],
             key="batch_method"
         )
 
@@ -1186,6 +1211,27 @@ with tab2:
                     st.info("ℹ️ GPU不可用，将使用CPU处理")
 
                 batch_params = {"model_type": batch_model_type, "target_size": batch_target_size, "use_gpu": batch_use_gpu}
+            elif batch_method == "CellSAM深度学习":
+                # 提示信息
+                st.info("ℹ️ CellSAM直接在当前环境中运行。首次使用需要下载模型文件到 models/sam/ 目录")
+
+                batch_model_type = st.selectbox("模型类型", ["vit_b", "vit_l", "vit_h"], key="batch_cellsam_model",
+                                               help="vit_b: 基础模型(91M参数), vit_l: 大模型(308M), vit_h: 超大模型(636M)")
+                batch_points_per_side = st.slider("提示点密度", 16, 64, 32, 8, key="batch_points_per_side",
+                                                 help="每边生成的提示点数量。较大的值可检测更多细胞，但处理更慢。推荐32")
+
+                # GPU选项
+                if GPU_AVAILABLE and GPU_COMPATIBLE:
+                    batch_use_gpu = st.checkbox(f"🚀 使用GPU加速 ({GPU_NAME})", value=True, key="batch_cellsam_gpu",
+                                               help="CellSAM推荐使用GPU")
+                elif GPU_AVAILABLE and not GPU_COMPATIBLE:
+                    batch_use_gpu = False
+                    st.error(f"⚠️ GPU不兼容: {GPU_WARNING}")
+                else:
+                    batch_use_gpu = False
+                    st.info("ℹ️ GPU不可用，将使用CPU处理")
+
+                batch_params = {"model_type": batch_model_type, "points_per_side": batch_points_per_side, "use_gpu": batch_use_gpu}
             else:
                 batch_params = {}
 
