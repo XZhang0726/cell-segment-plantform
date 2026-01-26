@@ -69,6 +69,23 @@ except:
     GPU_COMPATIBLE = False
     GPU_WARNING = None
 
+# 检查CellViT环境是否存在
+def check_cellvit_environment():
+    """检查CellViT专用环境是否存在"""
+    try:
+        from pathlib import Path
+        project_root = Path(__file__).parent
+        cellvit_env_path = project_root / "env_cellvit"
+
+        if cellvit_env_path.exists():
+            return True, "env_cellvit"
+        else:
+            return False, "not_found"
+    except:
+        return False, "unknown"
+
+CELLVIT_ENV_OK, CELLVIT_ENV_STATUS = check_cellvit_environment()
+
 # 页面配置
 st.set_page_config(
     page_title="细胞分割平台 - 增强版",
@@ -138,12 +155,41 @@ def extract_individual_cells(image_np, mask, min_area=100):
         individual_cells: 单个细胞图像列表
         cell_info: 细胞信息列表（包含位置、面积等）
     """
+    from loguru import logger
+
     individual_cells = []
     cell_info = []
 
     # 获取所有唯一标签（排除背景0）
     unique_labels = np.unique(mask)
     unique_labels = unique_labels[unique_labels > 0]
+
+    # 调试信息
+    logger.info(f"[Cell Extraction] 掩码中的唯一标签数: {len(unique_labels)}")
+    logger.info(f"[Cell Extraction] 掩码形状: {mask.shape}, 图像形状: {image_np.shape}")
+    logger.info(f"[Cell Extraction] 掩码值范围: {mask.min()} - {mask.max()}")
+
+    # 检查是否为二值掩码，如果是则转换为实例分割掩码
+    if len(unique_labels) == 1:
+        logger.info(f"[Cell Extraction] 检测到二值掩码，应用连通组件标记...")
+        # 将掩码转换为二值图（0和1）
+        binary_mask = (mask > 0).astype(np.uint8)
+
+        # 应用连通组件标记
+        from scipy.ndimage import label as scipy_label
+        labeled_mask, num_features = scipy_label(binary_mask)
+
+        logger.info(f"[Cell Extraction] 连通组件标记完成，检测到 {num_features} 个区域")
+
+        # 更新mask和unique_labels
+        mask = labeled_mask
+        unique_labels = np.unique(mask)
+        unique_labels = unique_labels[unique_labels > 0]
+        logger.info(f"[Cell Extraction] 更新后的唯一标签数: {len(unique_labels)}")
+
+    # 计算图像总面积，用于过滤异常大的区域
+    total_area = image_np.shape[0] * image_np.shape[1]
+    max_area = total_area * 0.5  # 最大面积为图像总面积的50%
 
     for label in unique_labels:
         # 创建当前细胞的二值掩码
@@ -154,6 +200,11 @@ def extract_individual_cells(image_np, mask, min_area=100):
 
         # 过滤太小的区域
         if area < min_area:
+            continue
+
+        # 过滤异常大的区域（可能是背景噪声或多个连接的细胞）
+        if area > max_area:
+            logger.warning(f"[Cell Extraction] 跳过异常大的区域 (label={int(label)}, area={area}, 占比={area/total_area*100:.1f}%)")
             continue
 
         # 获取边界框
@@ -174,6 +225,11 @@ def extract_individual_cells(image_np, mask, min_area=100):
         # 裁剪细胞图像和掩码
         cell_image = image_np[y1:y2, x1:x2].copy()
         cell_mask = cell_mask_binary[y1:y2, x1:x2] * 255
+
+        # 调试信息：显示前3个细胞的详细信息
+        if len(individual_cells) < 3:
+            logger.info(f"[Cell Extraction] 细胞 {int(label)}: bbox=({x1},{y1},{x2},{y2}), "
+                       f"提取图像大小={cell_image.shape}, 面积={area}")
 
         individual_cells.append({
             'image': cell_image,
@@ -234,6 +290,33 @@ def process_single_image_worker(args):
         }
 
 
+def colorize_instance_mask(mask):
+    """
+    为实例分割掩码着色，每个细胞使用不同颜色
+
+    Args:
+        mask: 实例分割掩码，每个细胞有唯一标签
+
+    Returns:
+        彩色掩码 (H, W, 3)
+    """
+    # 获取所有唯一标签（排除背景0）
+    unique_labels = np.unique(mask)
+    unique_labels = unique_labels[unique_labels > 0]
+
+    # 创建彩色掩码
+    h, w = mask.shape
+    colored_mask = np.zeros((h, w, 3), dtype=np.uint8)
+
+    # 为每个细胞分配随机颜色
+    np.random.seed(42)  # 固定随机种子以保持一致性
+    for label in unique_labels:
+        color = np.random.randint(0, 255, 3)
+        colored_mask[mask == label] = color
+
+    return colored_mask
+
+
 def segment_single_image(image_np, method, params, preprocess_options, postprocess_options=None):
     """
     分割单张图像
@@ -265,7 +348,8 @@ def segment_single_image(image_np, method, params, preprocess_options, postproce
         "自适应阈值": SegmentationMethod.ADAPTIVE,
         "分水岭算法": SegmentationMethod.WATERSHED,
         "Canny边缘检测": SegmentationMethod.EDGE_CANNY,
-        "Cellpose深度学习": SegmentationMethod.CELLPOSE
+        "Cellpose深度学习": SegmentationMethod.CELLPOSE,
+        "CellViT深度学习": SegmentationMethod.CELLVIT
     }
 
     seg_method = method_map[method]
@@ -286,10 +370,11 @@ def segment_single_image(image_np, method, params, preprocess_options, postproce
         is_labeled_mask = len(unique_labels) > 2  # 超过2个值说明是标签掩码（不只是0和1或0和255）
 
         if is_labeled_mask:
-            # 对于标签掩码（Cellpose、分水岭等），保留区域标签
-            binary_mask = (mask > 0).astype(np.uint8)
-            binary_mask = cv2.morphologyEx(binary_mask, cv2.MORPH_CLOSE, kernel)
-            mask = mask * binary_mask
+            # 对于实例分割掩码（CellViT、Cellpose等），跳过形态学闭运算
+            # 因为它会破坏实例标签，导致细胞边界框错误
+            from loguru import logger
+            logger.warning("[后处理] 检测到实例分割掩码，跳过形态学闭运算以保护标签完整性")
+            pass
         else:
             # 对于二值掩码（Otsu、自适应阈值等），直接进行闭运算
             if mask.dtype != np.uint8:
@@ -303,11 +388,21 @@ def segment_single_image(image_np, method, params, preprocess_options, postproce
         min_area = postprocess_options.get('min_cell_area', 100)
         individual_cells, cell_info = extract_individual_cells(image_np, mask, min_area)
 
-    # 归一化掩码
-    if mask.max() > 0:
-        mask_display = (mask / mask.max() * 255).astype(np.uint8)
+    # 检查是否为实例分割掩码（有多个唯一标签）
+    unique_labels = np.unique(mask)
+    num_instances = len(unique_labels[unique_labels > 0])
+    is_instance_segmentation = num_instances > 1
+
+    # 归一化掩码或着色
+    if is_instance_segmentation:
+        # 实例分割：为每个细胞着色
+        mask_display = colorize_instance_mask(mask)
     else:
-        mask_display = mask.astype(np.uint8)
+        # 二值分割：归一化为灰度图
+        if mask.max() > 0:
+            mask_display = (mask / mask.max() * 255).astype(np.uint8)
+        else:
+            mask_display = mask.astype(np.uint8)
 
     # 创建叠加图
     if len(processed_image.shape) == 2:
@@ -315,9 +410,16 @@ def segment_single_image(image_np, method, params, preprocess_options, postproce
     else:
         image_rgb = processed_image.copy()
 
-    overlay = image_rgb.copy()
-    overlay[mask > 0] = [255, 0, 0]
-    result = cv2.addWeighted(image_rgb, 0.7, overlay, 0.3, 0)
+    if is_instance_segmentation:
+        # 实例分割：使用彩色掩码叠加
+        colored_mask = colorize_instance_mask(mask)
+        overlay_mask = colored_mask.copy()
+        result = cv2.addWeighted(image_rgb, 0.7, overlay_mask, 0.3, 0)
+    else:
+        # 二值分割：使用红色叠加
+        overlay = image_rgb.copy()
+        overlay[mask > 0] = [255, 0, 0]
+        result = cv2.addWeighted(image_rgb, 0.7, overlay, 0.3, 0)
 
     # 统计信息
     foreground_pixels = np.sum(mask > 0)
@@ -526,7 +628,7 @@ with tab1:
             st.subheader("📐 分割方法")
             method = st.selectbox(
                 "选择方法",
-                ["Otsu阈值", "自适应阈值", "分水岭算法", "Canny边缘检测", "Cellpose深度学习"],
+                ["Otsu阈值", "自适应阈值", "分水岭算法", "Canny边缘检测", "Cellpose深度学习", "CellViT深度学习"],
                 index=4  # 默认选择Cellpose深度学习
             )
 
@@ -577,6 +679,36 @@ with tab1:
 
                 params = {"model_type": model_type, "diameter": diameter, "use_gpu": use_gpu,
                          "batch_size": batch_size, "normalize": normalize}
+            elif method == "CellViT深度学习":
+                st.write("**方法参数**")
+
+                # 环境检查
+                if not CELLVIT_ENV_OK:
+                    st.error(f"⚠️ CellViT专用环境未找到！")
+                    st.warning("CellViT需要专用环境。请按以下步骤创建：")
+                    st.code("conda create --prefix ./env_cellvit python=3.12 -y\nsource activate ./env_cellvit\npip install cellvit torch torchvision", language="bash")
+                    st.info("💡 或者选择其他分割方法（如Cellpose）")
+                else:
+                    st.success(f"✅ CellViT专用环境已就绪 (将自动调用 {CELLVIT_ENV_STATUS})")
+
+                model_type = st.selectbox("模型类型", ["CellViT-256"],
+                                         help="CellViT-256: 基于Vision Transformer的细胞核分割模型")
+                target_size = st.slider("目标图像大小", 256, 1024, 512, 64,
+                                       help="图像会被调整到此大小进行处理。较大的值可检测更多小细胞，但处理更慢。推荐512-768")
+
+                # GPU选项
+                if GPU_AVAILABLE and GPU_COMPATIBLE:
+                    use_gpu = st.checkbox(f"🚀 使用GPU加速 ({GPU_NAME})", value=True,
+                                         help="CellViT推荐使用GPU（需要8GB+ VRAM）")
+                elif GPU_AVAILABLE and not GPU_COMPATIBLE:
+                    use_gpu = False
+                    st.error(f"⚠️ GPU不兼容: {GPU_WARNING}")
+                    st.info("💡 将使用CPU模式处理（速度较慢）")
+                else:
+                    use_gpu = False
+                    st.info("ℹ️ GPU不可用，将使用CPU处理")
+
+                params = {"model_type": model_type, "target_size": target_size, "use_gpu": use_gpu}
             else:
                 params = {}
         else:
@@ -994,7 +1126,7 @@ with tab2:
         # 分割方法
         batch_method = st.selectbox(
             "分割方法",
-            ["Otsu阈值", "自适应阈值", "分水岭算法", "Canny边缘检测", "Cellpose深度学习"],
+            ["Otsu阈值", "自适应阈值", "分水岭算法", "Canny边缘检测", "Cellpose深度学习", "CellViT深度学习"],
             key="batch_method"
         )
 
@@ -1029,6 +1161,31 @@ with tab2:
                     st.info("ℹ️ GPU不可用，将使用CPU处理")
 
                 batch_params = {"model_type": batch_model_type, "diameter": batch_diameter, "use_gpu": batch_use_gpu}
+            elif batch_method == "CellViT深度学习":
+                # 环境检查
+                if not CELLVIT_ENV_OK:
+                    st.error(f"⚠️ CellViT专用环境未找到！")
+                    st.warning("请先创建CellViT环境")
+                else:
+                    st.success(f"✅ CellViT专用环境已就绪")
+
+                batch_model_type = st.selectbox("模型类型", ["CellViT-256"], key="batch_cellvit_model",
+                                               help="CellViT-256: 基于Vision Transformer的细胞核分割模型")
+                batch_target_size = st.slider("目标图像大小", 256, 1024, 512, 64, key="batch_target_size",
+                                             help="图像会被调整到此大小进行处理。较大的值可检测更多小细胞，但处理更慢。推荐512-768")
+
+                # GPU选项
+                if GPU_AVAILABLE and GPU_COMPATIBLE:
+                    batch_use_gpu = st.checkbox(f"🚀 使用GPU加速 ({GPU_NAME})", value=True, key="batch_cellvit_gpu",
+                                               help="CellViT推荐使用GPU")
+                elif GPU_AVAILABLE and not GPU_COMPATIBLE:
+                    batch_use_gpu = False
+                    st.error(f"⚠️ GPU不兼容: {GPU_WARNING}")
+                else:
+                    batch_use_gpu = False
+                    st.info("ℹ️ GPU不可用，将使用CPU处理")
+
+                batch_params = {"model_type": batch_model_type, "target_size": batch_target_size, "use_gpu": batch_use_gpu}
             else:
                 batch_params = {}
 

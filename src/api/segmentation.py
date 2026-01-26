@@ -12,6 +12,7 @@ from ..core.segmentation.threshold import ThresholdSegmentation
 from ..core.segmentation.watershed import WatershedSegmentation
 from ..core.segmentation.edge import EdgeDetection
 from ..core.segmentation.cellpose_seg import cellpose_segment
+from ..core.segmentation.cellvit_seg import cellvit_segment
 from ..inference.predictor import Predictor
 from ..core.utils.logger import get_logger
 
@@ -26,6 +27,7 @@ class SegmentationMethod(Enum):
     EDGE_CANNY = "edge_canny"
     DEEP_LEARNING = "deep_learning"
     CELLPOSE = "cellpose"
+    CELLVIT = "cellvit"
 
 
 class CellSegmenter:
@@ -104,6 +106,8 @@ class CellSegmenter:
             return self._segment_edge(image, **kwargs)
         elif self.method == SegmentationMethod.CELLPOSE:
             return self._segment_cellpose(image, **kwargs)
+        elif self.method == SegmentationMethod.CELLVIT:
+            return self._segment_cellvit(image, **kwargs)
         elif self.method == SegmentationMethod.DEEP_LEARNING:
             return self._segment_deep_learning(image, **kwargs)
         else:
@@ -169,4 +173,19 @@ class CellSegmenter:
             channels=channels,
             progress_bar=progress_bar,
             use_gpu=use_gpu
+        )
+
+    def _segment_cellvit(self, image: np.ndarray, **kwargs) -> np.ndarray:
+        """使用CellViT深度学习模型分割"""
+        model_type = kwargs.get('model_type', 'CellViT-256')
+        use_gpu = kwargs.get('use_gpu', False)
+        target_size = kwargs.get('target_size', 256)
+        progress_bar = kwargs.get('progress_bar', None)
+
+        return cellvit_segment(
+            image,
+            model_type=model_type,
+            use_gpu=use_gpu,
+            target_size=target_size,
+            progress_bar=progress_bar
         )

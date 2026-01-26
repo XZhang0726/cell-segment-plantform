@@ -14,9 +14,9 @@ import multiprocessing
 try:
     from cellpose import models
     CELLPOSE_AVAILABLE = True
-except ImportError:
+except Exception as e:
     CELLPOSE_AVAILABLE = False
-    logger.warning("Cellpose not installed. Please install: pip install cellpose")
+    logger.warning(f"Cellpose not available: {type(e).__name__}: {str(e)}")
 
 
 class StreamlitProgressBar:
