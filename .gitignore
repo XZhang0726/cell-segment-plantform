@@ -88,6 +88,9 @@ optimized_segmentation_results/
 # Example data (may contain large files)
 examples/
 
+# Datasets (large data files)
+datasets/
+
 # Temporary files
 nul
 
