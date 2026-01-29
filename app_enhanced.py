@@ -40,6 +40,55 @@ from src.ml.anomaly_detection import (detect_isolation_forest, detect_lof,
                                        visualize_isolation_forest, visualize_lof,
                                        visualize_one_class_svm, visualize_elliptic_envelope)
 
+# 导入新增ML模块
+from src.ml.supervised_learning import (
+    train_supervised_model, compare_models_automl,
+    evaluate_classification, evaluate_regression,
+    save_model, load_model,
+    plot_feature_importance, plot_confusion_matrix, plot_roc_curves,
+    plot_prediction_vs_actual, plot_residuals, plot_learning_curves
+)
+from src.ml.active_learning import (
+    active_learning_workflow, uncertainty_sampling, query_by_committee,
+    bayesian_optimization_loop,
+    plot_uncertainty_intervals, plot_acquisition_function,
+    plot_optimization_trajectory, plot_convergence
+)
+from src.ml.virtual_screening import (
+    screen_dataset, batch_screen_files,
+    rank_by_prediction, filter_by_confidence, select_top_candidates,
+    plot_prediction_distribution, plot_confidence_distribution,
+    plot_top_candidates, plot_prediction_vs_confidence
+)
+
+# 导入i18n翻译模块
+from locales.i18n import t, get_i18n
+
+def build_help_markdown():
+    """构建帮助文档的markdown内容"""
+    i18n = get_i18n()
+    help_data = i18n.translations.get('help', {})
+
+    md = f"### {help_data.get('overview', {}).get('title', '')}\n\n"
+    md += f"{help_data.get('overview', {}).get('content', '')}\n\n"
+
+    # 添加各个标签页的说明
+    for i in range(1, 11):
+        tab = help_data.get(f'tab{i}', {})
+        if tab:
+            md += f"#### {tab.get('title', '')}\n"
+            md += f"{tab.get('description', '')}\n"
+            features = tab.get('features', [])
+            if features:
+                for feat in features:
+                    md += f"- {feat}\n"
+            usage = tab.get('usage', '')
+            if usage:
+                md += f"\n**{t('common.usage') if 'common.usage' in dir() else 'Usage'}**: {usage}\n"
+            md += "\n"
+
+    return md
+
 # 检查GPU可用性
 try:
     import torch
@@ -55,7 +104,7 @@ try:
                 GPU_WARNING = None
             else:
                 GPU_COMPATIBLE = False
-                GPU_WARNING = f"⚠️ {GPU_NAME} 需要PyTorch 2.10.0+cu128支持，当前版本 {pytorch_version} 不兼容。"
+                GPU_WARNING = t('messages.gpu_incompatible', gpu_name=GPU_NAME, version=pytorch_version)
         else:
             GPU_COMPATIBLE = True
             GPU_WARNING = None
@@ -88,7 +137,7 @@ CELLVIT_ENV_OK, CELLVIT_ENV_STATUS = check_cellvit_environment()
 
 # 页面配置
 st.set_page_config(
-    page_title="细胞分割平台 - 增强版",
+    page_title="Cell Segmentation Platform - Enhanced",
     page_icon="🔬",
     layout="wide"
 )
@@ -344,13 +393,13 @@ def segment_single_image(image_np, method, params, preprocess_options, postproce
 
     # 创建分割器
     method_map = {
-        "Otsu阈值": SegmentationMethod.OTSU,
-        "自适应阈值": SegmentationMethod.ADAPTIVE,
-        "分水岭算法": SegmentationMethod.WATERSHED,
-        "Canny边缘检测": SegmentationMethod.EDGE_CANNY,
-        "Cellpose深度学习": SegmentationMethod.CELLPOSE,
-        "CellViT深度学习": SegmentationMethod.CELLVIT,
-        "CellSAM深度学习": SegmentationMethod.CELLSAM
+        t('methods.otsu'): SegmentationMethod.OTSU,
+        t('methods.adaptive'): SegmentationMethod.ADAPTIVE,
+        t('methods.watershed'): SegmentationMethod.WATERSHED,
+        t('methods.canny'): SegmentationMethod.EDGE_CANNY,
+        t('methods.cellpose'): SegmentationMethod.CELLPOSE,
+        t('methods.cellvit'): SegmentationMethod.CELLVIT,
+        t('methods.cellsam'): SegmentationMethod.CELLSAM
     }
 
     seg_method = method_map[method]
@@ -496,83 +545,25 @@ def create_comparison_view(image_np, methods, params_dict, preprocess_options, p
 # 标题
 col_title, col_help = st.columns([6, 1])
 with col_title:
-    st.title("🔬 细胞分割平台 - 增强版")
-    st.markdown("支持批量处理、多方法对比、预处理选项和结果导出")
+    st.title(t('app.title_enhanced'))
+    st.markdown(t('app.subtitle_enhanced'))
 
     # GPU状态指示器
     if GPU_AVAILABLE and GPU_COMPATIBLE:
-        st.success(f"🚀 GPU加速可用: {GPU_NAME}")
+        st.success(t('messages.gpu_available', gpu_name=GPU_NAME))
     elif GPU_AVAILABLE and not GPU_COMPATIBLE:
-        st.error(f"❌ GPU检测到但不兼容: {GPU_NAME}")
+        st.error(t('messages.gpu_detected_incompatible', gpu_name=GPU_NAME))
         st.warning(GPU_WARNING)
     else:
-        st.info("ℹ️ GPU不可用，将使用CPU处理")
+        st.info(t('messages.gpu_unavailable'))
 with col_help:
     st.write("")  # 添加空行对齐
-    with st.popover("📖 使用说明"):
-        st.markdown("""
-        ### 功能介绍
-
-        #### 1. 图像分割
-        - **分割方法**:
-          - 传统方法: Otsu阈值、自适应阈值、分水岭算法、Canny边缘检测
-          - 深度学习: Cellpose（推荐用于复杂细胞图像和重叠细胞分割）
-        - **预处理选项**: 去噪、对比度增强、归一化
-        - **结果导出**: 下载分割掩码和叠加图
-
-        #### 2. 对比模式
-        - 同时使用多种分割方法进行对比
-        - 并排显示不同方法的分割结果
-        - 性能对比表：显示前景比例和处理时间
-        - 批量导出所有方法的掩码、叠加图和对比报告
-
-        #### 3. 批量处理
-        - 一次上传多张图像进行批量分割
-        - 自动应用相同的分割参数和预处理选项
-        - 实时显示处理进度
-        - 可视化查看每张图像的分割结果
-        - 批量导出掩码、叠加图和统计报告（ZIP格式）
-
-        #### 4. 预处理选项
-        - **去噪处理**: 使用高斯滤波减少图像噪声
-        - **对比度增强**: 使用CLAHE算法增强局部对比度
-        - **归一化**: 将像素值归一化到标准范围
-
-        #### 5. 后处理选项
-        - **区域闭合**: 使用形态学闭运算填充细胞边界间隙，获得完整的细胞区域
-        - **提取单个细胞**: 自动提取每个细胞样本，支持机器学习训练数据准备
-        - **最小细胞面积**: 过滤掉面积过小的噪声区域
-
-        #### 6. 异常检测
-        - **独立模块**: 在"🔍 异常检测"tab中上传细胞特征CSV文件
-        - **异常检测算法**: Isolation Forest、LOF、One-Class SVM、Elliptic Envelope，识别形态异常的细胞
-        - **降维可视化**: PCA、t-SNE、UMAP，2D可视化异常样本分布
-        - **结果导出**: 下载带异常标签的CSV文件，支持导出仅正常样本
-
-        #### 7. 聚类分析
-        - **独立模块**: 在"📊 聚类分析"tab中上传细胞特征CSV文件
-        - **聚类算法**: K-means、DBSCAN、层次聚类、GMM，自动发现细胞亚群
-        - **左右分栏布局**: 左侧设置参数和查看结果，右侧实时可视化聚类效果
-        - **降维可视化**: PCA、t-SNE、UMAP，2D可视化高维特征
-        - **结果导出**: 下载带聚类标签的CSV文件
-        - **CSV格式**: 需包含基础形态学特征（面积、圆度、长轴、短轴等）
-
-        ### 使用技巧
-        - **Cellpose深度学习**: 对于重叠或接触的细胞，推荐使用Cellpose方法，效果最佳
-        - **模型选择**: cyto2适合大多数细胞质染色图像，nuclei适合细胞核染色图像
-        - **预处理**: 对于噪声较大的图像，建议启用去噪和对比度增强
-        - **区域闭合**: 默认启用，可填补细胞边界的小间隙，获得更完整的分割结果
-        - **细胞提取**: 启用后可导出单个细胞样本，适合用于深度学习模型训练
-        - **批量处理**: 适合处理大量相似类型的细胞图像
-        - **对比模式**: 不确定哪种方法最适合时，使用"对比模式"tab快速评估多种方法
-        - **参数调整**: 根据图像特点调整方法参数以获得最佳效果
-        - **异常检测**: 完成特征提取后，可在"🔍 异常检测"tab上传CSV进行异常检测，识别形态异常的细胞
-        - **聚类分析**: 完成特征提取后，可在"📊 聚类分析"tab上传CSV进行聚类分析，自动发现细胞亚群
-        """)
+    with st.popover(t('app.help_title')):
+        st.markdown(build_help_markdown())
 
 # ==================== 模型融合流程函数 ====================
 def run_fusion_pipeline(image, selected_models, strategy, iou_threshold, min_vote_count, weights, model_params, display_col,
-                       model_reliabilities=None, conflict_threshold=0.6):
+                       model_reliabilities=None, conflict_threshold=0.6, postprocess_options=None):
     """执行完整的融合流程（支持简单策略和DST高级融合）"""
     # 使用优化版本的实例匹配（57倍加速）
     from src.core.fusion import match_instances, fuse_instances, fuse_instances_dst, generate_confidence_maps
@@ -582,17 +573,17 @@ def run_fusion_pipeline(image, selected_models, strategy, iou_threshold, min_vot
 
     # 模型名称映射
     model_name_mapping = {
-        "cellpose": "Cellpose深度学习",
-        "cellvit": "CellViT深度学习",
-        "cellsam": "CellSAM深度学习",
-        "watershed": "分水岭算法",
-        "otsu": "Otsu阈值",
-        "adaptive": "自适应阈值",
-        "canny": "Canny边缘检测"
+        "cellpose": t('methods.cellpose'),
+        "cellvit": t('methods.cellvit'),
+        "cellsam": t('methods.cellsam'),
+        "watershed": t('methods.watershed'),
+        "otsu": t('methods.otsu'),
+        "adaptive": t('methods.adaptive'),
+        "canny": t('methods.canny')
     }
 
     with display_col:
-        with st.spinner("正在运行多模型推理..."):
+        with st.spinner(t('messages.running_multi_model_inference')):
             # 1. 运行所有选择的模型
             masks_list = []
             model_names = []
@@ -606,16 +597,31 @@ def run_fusion_pipeline(image, selected_models, strategy, iou_threshold, min_vot
                 'normalize': False
             }
 
-            postprocess_options = {
-                'closing': True,
-                'closing_kernel_size': 5,
-                'extract_cells': False,
-                'min_cell_area': 100,
-                'extract_morphology': False
-            }
+            # 使用传入的后处理选项，如果没有则使用默认值
+            if postprocess_options is None:
+                postprocess_options = {
+                    'closing': True,
+                    'closing_kernel_size': 5,
+                    'extract_cells': False,
+                    'min_cell_area': 100,
+                    'extract_morphology': False,
+                    'use_advanced_features': False
+                }
+            else:
+                # 确保所有必需的键都存在
+                default_postprocess = {
+                    'closing': True,
+                    'closing_kernel_size': 5,
+                    'extract_cells': False,
+                    'min_cell_area': 100,
+                    'extract_morphology': False,
+                    'use_advanced_features': False
+                }
+                default_postprocess.update(postprocess_options)
+                postprocess_options = default_postprocess
 
             for idx, model_name in enumerate(selected_models):
-                st.text(f"运行 {model_name}...")
+                st.text(t('messages.running_model', model_name=model_name))
 
                 try:
                     # 获取完整的方法名称
@@ -654,7 +660,7 @@ def run_fusion_pipeline(image, selected_models, strategy, iou_threshold, min_vot
                     model_names.append(model_name)
 
                 except Exception as e:
-                    st.error(f"❌ {model_name} 推理失败: {str(e)}")
+                    st.error(t('messages.model_inference_failed', model_name=model_name, error=str(e)))
                     import traceback
                     st.text(traceback.format_exc())
                     continue
@@ -662,33 +668,33 @@ def run_fusion_pipeline(image, selected_models, strategy, iou_threshold, min_vot
                 progress_bar.progress((idx + 1) / len(selected_models))
 
             if len(masks_list) < 2:
-                st.error("❌ 至少需要2个模型成功运行才能进行融合")
+                st.error(t('messages.at_least_two_models_needed'))
                 return
 
-            st.success(f"✅ 完成 {len(masks_list)} 个模型的推理")
+            st.success(t('messages.model_inference_completed', count=len(masks_list)))
 
         # 创建融合进度条
-        st.subheader("🔀 融合处理进度")
+        st.subheader(t('common.fusion_progress'))
         fusion_progress = st.progress(0)
         fusion_status = st.empty()
 
         # 步骤1: 实例匹配 (0% -> 33%)
-        fusion_status.text("🔍 步骤 1/3: 正在进行实例匹配...")
+        fusion_status.text(t('messages.fusion_step1_matching'))
         try:
             matched_groups = match_instances(masks_list, iou_threshold)
             fusion_progress.progress(0.33)
-            fusion_status.text(f"✅ 步骤 1/3 完成: 匹配到 {len(matched_groups)} 个细胞实例组")
+            fusion_status.text(t('messages.fusion_step1_completed', count=len(matched_groups)))
         except Exception as e:
-            st.error(f"❌ 实例匹配失败: {str(e)}")
+            st.error(t('messages.instance_matching_failed', error=str(e)))
             return
 
         # 步骤2: 融合掩码 (33% -> 66%)
-        fusion_status.text("🎯 步骤 2/3: 正在融合分割结果...")
+        fusion_status.text(t('messages.fusion_step2_fusing'))
         try:
             # 判断使用简单策略还是DST高级融合
             if strategy == 'dempster_shafer':
                 # DST高级融合
-                fusion_status.text("🎓 使用Dempster-Shafer理论进行高级融合...")
+                fusion_status.text(t('messages.fusion_step2_dst'))
 
                 # 生成合成置信度图（基于距离变换，边界置信度低，中心置信度高）
                 confidences_list = generate_confidence_maps(masks_list, model_names, model_reliabilities)
@@ -708,8 +714,10 @@ def run_fusion_pipeline(image, selected_models, strategy, iou_threshold, min_vot
                 strategy_counts = dst_stats.get('strategy_counts', {})
                 dominant_strategy = max(strategy_counts.items(), key=lambda x: x[1])[0] if strategy_counts else "UNKNOWN"
 
-                fusion_status.text(f"✅ 步骤 2/3 完成: DST融合生成 {np.max(fused_mask)} 个细胞 "
-                                 f"(平均冲突={dst_stats['average_conflict']:.3f}, 主要策略={dominant_strategy})")
+                fusion_status.text(
+                    t('messages.fusion_step2_dst_completed', count=np.max(fused_mask)) +
+                    f" (平均冲突={dst_stats['average_conflict']:.3f}, 主要策略={dominant_strategy})"
+                )
             else:
                 # 简单融合策略
                 weight_list = None
@@ -723,45 +731,89 @@ def run_fusion_pipeline(image, selected_models, strategy, iou_threshold, min_vot
                 dst_stats = None
 
                 fusion_progress.progress(0.66)
-                fusion_status.text(f"✅ 步骤 2/3 完成: 融合生成 {np.max(fused_mask)} 个细胞")
+                fusion_status.text(t('messages.fusion_step2_completed', count=np.max(fused_mask)))
         except Exception as e:
-            st.error(f"❌ 融合失败: {str(e)}")
+            st.error(t('messages.fusion_failed', error=str(e)))
             import traceback
             st.text(traceback.format_exc())
             return
 
         # 步骤3: 计算不确定性 (66% -> 100%)
-        fusion_status.text("📊 步骤 3/3: 正在计算模型一致性和不确定性...")
+        fusion_status.text(t('messages.fusion_step3_calculating'))
         try:
             disagreement_map, consistency_score = compute_disagreement_map(masks_list)
             consistency_matrix, avg_consistency = compute_model_consistency(masks_list)
             fusion_progress.progress(1.0)
-            fusion_status.text(f"✅ 步骤 3/3 完成: 模型一致性 {consistency_score:.2%}")
+            fusion_status.text(t('messages.fusion_step3_completed', consistency=consistency_score))
         except Exception as e:
-            st.error(f"❌ 不确定性计算失败: {str(e)}")
+            st.error(t('messages.uncertainty_calculation_failed', error=str(e)))
             return
 
         # 完成提示
-        st.success("🎉 融合处理全部完成！")
+        st.success(t('messages.fusion_completed'))
 
         # 清除进度条和状态文本（可选，如果想保留就注释掉）
         # fusion_progress.empty()
         # fusion_status.empty()
 
-        # 5. 显示结果
-        st.subheader("📊 融合结果")
+        # 4.5. 提取单个细胞样本和形态学特征（如果需要）
+        individual_cells = None
+        cell_info = None
+        morphology_features = None
 
-        # 根据是否使用DST决定显示哪些tab
+        if postprocess_options.get('extract_cells', False) or postprocess_options.get('extract_morphology', False):
+            min_area = postprocess_options.get('min_cell_area', 100)
+
+            # 提取单个细胞样本
+            if postprocess_options.get('extract_cells', False):
+                try:
+                    individual_cells, cell_info = extract_individual_cells(image, fused_mask, min_area)
+                    st.info(f"已提取 {len(individual_cells)} 个单细胞样本")
+                except Exception as e:
+                    st.warning(f"单细胞提取失败: {str(e)}")
+
+            # 提取形态学特征
+            if postprocess_options.get('extract_morphology', False):
+                try:
+                    use_advanced = postprocess_options.get('use_advanced_features', False)
+                    if use_advanced:
+                        morphology_features = extract_advanced_cell_features(
+                            fused_mask, image, min_area=min_area,
+                            include_hu_moments=True,
+                            include_intensity=True,
+                            include_texture=True,
+                            include_boundary=True,
+                            include_advanced_shape=True
+                        )
+                    else:
+                        morphology_features = extract_cell_features(image, fused_mask, min_area=min_area)
+
+                    st.info(f"已提取 {len(morphology_features)} 个细胞的形态学特征")
+                except Exception as e:
+                    st.warning(f"形态学特征提取失败: {str(e)}")
+
+        # 5. 显示结果
+        st.subheader(t('common.fusion_results'))
+
+        # 根据是否使用DST和单细胞提取决定显示哪些tab
+        tab_names = [t('fusion.fused_mask_tab'), t('fusion.uncertainty_heatmap_tab'), t('fusion.model_comparison_tab')]
+
+        # 如果启用了单细胞提取或形态学特征提取，添加单细胞分析tab
+        has_cell_analysis = (individual_cells is not None and len(individual_cells) > 0) or (morphology_features is not None and len(morphology_features) > 0)
+        if has_cell_analysis:
+            tab_names.append("单细胞分析")
+
+        # 如果使用了DST，添加DST分析tab
         if dst_stats is not None:
-            result_tabs = st.tabs(["融合掩码", "不确定性热图", "模型对比", "🎓 DST分析"])
-        else:
-            result_tabs = st.tabs(["融合掩码", "不确定性热图", "模型对比"])
+            tab_names.append(t('fusion.dst_analysis_tab'))
+
+        result_tabs = st.tabs(tab_names)
 
         with result_tabs[0]:
             # 显示融合掩码
             try:
                 fused_display = label2rgb(fused_mask, bg_label=0)
-                st.image(fused_display, caption="融合后的分割结果", use_container_width=True)
+                st.image(fused_display, caption=t('fusion.fused_result_caption'), use_container_width=True)
 
                 # 添加下载按钮
                 from io import BytesIO
@@ -769,13 +821,13 @@ def run_fusion_pipeline(image, selected_models, strategy, iou_threshold, min_vot
                 buf = BytesIO()
                 fused_img.save(buf, format='PNG')
                 st.download_button(
-                    label="📥 下载融合掩码",
+                    label=t('fusion.download_fused_mask'),
                     data=buf.getvalue(),
                     file_name="fused_mask.png",
                     mime="image/png"
                 )
             except Exception as e:
-                st.error(f"显示融合掩码失败: {str(e)}")
+                st.error(t('messages.display_fusion_mask_failed', error=str(e)))
 
         with result_tabs[1]:
             # 显示不确定性热图（叠加在原图上）
@@ -872,7 +924,7 @@ def run_fusion_pipeline(image, selected_models, strategy, iou_threshold, min_vot
                 fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
                 buf.seek(0)
                 st.download_button(
-                    label="📥 下载不确定性热图",
+                    label=t('fusion.download_disagreement_heatmap'),
                     data=buf.getvalue(),
                     file_name="uncertainty_heatmap.png",
                     mime="image/png"
@@ -880,7 +932,7 @@ def run_fusion_pipeline(image, selected_models, strategy, iou_threshold, min_vot
 
                 plt.close(fig)
             except Exception as e:
-                st.error(f"显示不确定性热图失败: {str(e)}")
+                st.error(t('messages.display_uncertainty_heatmap_failed', error=str(e)))
 
         with result_tabs[2]:
             # 模型对比
@@ -897,60 +949,128 @@ def run_fusion_pipeline(image, selected_models, strategy, iou_threshold, min_vot
                         buf = BytesIO()
                         model_img.save(buf, format='PNG')
                         st.download_button(
-                            label=f"📥 下载",
+                            label=t('common.download'),
                             data=buf.getvalue(),
                             file_name=f"{model_name}_result.png",
                             mime="image/png",
                             key=f"download_{model_name}_{idx}"
                         )
             except Exception as e:
-                st.error(f"显示模型对比失败: {str(e)}")
+                st.error(t('messages.display_model_comparison_failed', error=str(e)))
+
+        # 单细胞分析tab（仅在启用单细胞提取或形态学特征提取时显示）
+        if has_cell_analysis:
+            # 计算单细胞分析tab的索引（总是在第4个位置，索引为3）
+            cell_tab_idx = 3
+            with result_tabs[cell_tab_idx]:
+                st.markdown("### 单细胞分析")
+
+                # 显示单细胞样本
+                if individual_cells is not None and len(individual_cells) > 0:
+                    st.markdown("#### 单细胞样本")
+                    st.caption(f"共提取 {len(individual_cells)} 个单细胞样本（面积 ≥ {postprocess_options.get('min_cell_area', 100)} 像素）")
+
+                    # 使用列布局显示单细胞样本（每行4个）
+                    num_cells = len(individual_cells)
+                    cells_per_row = 4
+                    num_rows = (num_cells + cells_per_row - 1) // cells_per_row
+
+                    for row_idx in range(min(num_rows, 5)):  # 最多显示5行（20个细胞）
+                        cols = st.columns(cells_per_row)
+                        for col_idx in range(cells_per_row):
+                            cell_idx = row_idx * cells_per_row + col_idx
+                            if cell_idx < num_cells:
+                                with cols[col_idx]:
+                                    cell_img = individual_cells[cell_idx]['image']
+                                    info = cell_info[cell_idx]
+                                    st.image(cell_img, caption=f"细胞 {info['id']}", use_container_width=True)
+                                    st.caption(f"面积: {info['area']} px")
+
+                    if num_cells > 20:
+                        st.info(f"仅显示前20个细胞样本，共有 {num_cells} 个细胞")
+
+                # 显示形态学特征
+                if morphology_features is not None and len(morphology_features) > 0:
+                    st.markdown("#### 形态学特征")
+                    st.caption(f"共提取 {len(morphology_features)} 个细胞的形态学特征")
+
+                    # 转换为DataFrame并显示
+                    import pandas as pd
+                    features_df = pd.DataFrame(morphology_features)
+
+                    # 显示统计摘要
+                    st.markdown("**特征统计摘要**")
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("细胞数量", len(features_df))
+                    with col2:
+                        st.metric("平均面积", f"{features_df['area_pixels'].mean():.1f} px")
+                    with col3:
+                        st.metric("平均周长", f"{features_df['perimeter_pixels'].mean():.1f} px")
+                    with col4:
+                        if 'circularity' in features_df.columns:
+                            st.metric("平均圆度", f"{features_df['circularity'].mean():.3f}")
+
+                    # 显示特征表格
+                    st.markdown("**详细特征表**")
+                    st.dataframe(features_df, use_container_width=True, height=300)
+
+                    # 下载按钮
+                    csv = features_df.to_csv(index=False)
+                    st.download_button(
+                        label="下载形态学特征 (CSV)",
+                        data=csv,
+                        file_name=f"fusion_morphology_features_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv"
+                    )
 
         # DST分析tab（仅在使用DST融合时显示）
         if dst_stats is not None:
-            with result_tabs[3]:
-                st.markdown("### 🎓 Dempster-Shafer理论融合分析")
+            # 计算DST分析tab的索引（如果有单细胞分析tab，则在第5个位置，索引为4；否则在第4个位置，索引为3）
+            dst_tab_idx = 4 if has_cell_analysis else 3
+            with result_tabs[dst_tab_idx]:
+                st.markdown(t('fusion.dst_analysis_title'))
 
                 # DST统计摘要
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric("融合实例数", dst_stats['fused_count'])
+                    st.metric(t('metrics.fused_instances'), dst_stats['fused_count'])
                 with col2:
-                    st.metric("平均冲突度", f"{dst_stats['average_conflict']:.3f}")
+                    st.metric(t('metrics.average_conflict'), f"{dst_stats['average_conflict']:.3f}")
                 with col3:
-                    st.metric("平均不确定性", f"{dst_stats['average_uncertainty']:.3f}")
+                    st.metric(t('metrics.average_uncertainty'), f"{dst_stats['average_uncertainty']:.3f}")
                 with col4:
-                    st.metric("高冲突实例", dst_stats['high_conflict_count'])
+                    st.metric(t('metrics.high_conflict_instances'), dst_stats['high_conflict_count'])
 
                 # 策略分布统计
-                st.markdown("#### 📊 自适应融合策略分布")
-                st.caption("DST根据置信度和冲突度自动选择不同的融合策略")
+                st.markdown(t('fusion.adaptive_strategy_distribution_title'))
+                st.caption(t('fusion.adaptive_strategy_description'))
 
                 # 显示置信度和冲突度分布
                 if 'confidence_distribution' in dst_stats and 'conflict_distribution' in dst_stats:
                     col1, col2 = st.columns(2)
 
                     with col1:
-                        st.markdown("**置信度分布**")
+                        st.markdown(t('fusion.confidence_distribution'))
                         conf_dist = dst_stats['confidence_distribution']
-                        st.text(f"范围: [{conf_dist['min']:.3f}, {conf_dist['max']:.3f}]")
-                        st.text(f"均值: {conf_dist['mean']:.3f}")
-                        st.text(f"标准差: {conf_dist['std']:.3f}")
+                        st.text(f"{t('metrics.range')}: [{conf_dist['min']:.3f}, {conf_dist['max']:.3f}]")
+                        st.text(f"{t('metrics.mean')}: {conf_dist['mean']:.3f}")
+                        st.text(f"{t('metrics.std')}: {conf_dist['std']:.3f}")
 
                         # 判断置信度变化是否足够
                         if conf_dist['std'] < 0.05:
-                            st.warning("⚠️ 置信度变化很小，可能导致策略单一")
+                            st.warning(t('messages.confidence_change_small'))
 
                     with col2:
-                        st.markdown("**冲突度分布**")
+                        st.markdown(t('fusion.conflict_distribution'))
                         conflict_dist = dst_stats['conflict_distribution']
-                        st.text(f"范围: [{conflict_dist['min']:.3f}, {conflict_dist['max']:.3f}]")
-                        st.text(f"均值: {conflict_dist['mean']:.3f}")
-                        st.text(f"标准差: {conflict_dist['std']:.3f}")
+                        st.text(f"{t('metrics.range')}: [{conflict_dist['min']:.3f}, {conflict_dist['max']:.3f}]")
+                        st.text(f"{t('metrics.mean')}: {conflict_dist['mean']:.3f}")
+                        st.text(f"{t('metrics.std')}: {conflict_dist['std']:.3f}")
 
                         # 判断冲突度变化是否足够
                         if conflict_dist['std'] < 0.05:
-                            st.warning("⚠️ 冲突度变化很小，可能导致策略单一")
+                            st.warning(t('messages.conflict_change_small'))
 
                     st.markdown("---")
 
@@ -975,7 +1095,7 @@ def run_fusion_pipeline(image, selected_models, strategy, iou_threshold, min_vot
                     st.dataframe(strategy_df, use_container_width=True, hide_index=True)
 
                     # 策略说明
-                    with st.expander("📖 策略说明", expanded=False):
+                    with st.expander(t('fusion.strategy_explanation'), expanded=False):
                         st.markdown("""
                         **策略类型及其含义：**
 
@@ -993,12 +1113,12 @@ def run_fusion_pipeline(image, selected_models, strategy, iou_threshold, min_vot
                         **策略选择基于二维决策矩阵：置信度 × 冲突度**
                         """)
                 else:
-                    st.warning("⚠️ 未找到策略分布数据")
+                    st.warning(t('messages.strategy_distribution_not_found'))
 
                 # 高冲突实例列表
                 if dst_stats['high_conflict_count'] > 0:
-                    st.markdown("#### ⚠️ 高冲突实例（需要注意）")
-                    st.caption("这些实例的模型预测存在较大分歧，建议人工审查")
+                    st.markdown(t('fusion.high_conflict_instances_title'))
+                    st.caption(t('fusion.high_conflict_note'))
 
                     import pandas as pd
                     conflict_df = pd.DataFrame(dst_stats['high_conflict_instances'])
@@ -1007,28 +1127,29 @@ def run_fusion_pipeline(image, selected_models, strategy, iou_threshold, min_vot
                 # 分水岭边界细化统计
                 watershed_stats = dst_stats.get('watershed_refinement', {})
                 if watershed_stats.get('refined', False):
-                    st.markdown("#### 🌊 分水岭边界细化")
-                    st.success(f"✅ 成功细化 {watershed_stats['refined_pixels']} 个像素 "
-                              f"({watershed_stats['refined_percentage']:.2f}%)")
+                    st.markdown(t('messages.watershed_refinement_title'))
+                    st.success(t('messages.watershed_refinement_success',
+                                 pixels=watershed_stats['refined_pixels'],
+                                 percentage=watershed_stats['refined_percentage']))
 
                     col1, col2 = st.columns(2)
                     with col1:
-                        st.metric("种子数量", watershed_stats.get('num_markers', 0))
+                        st.metric(t('metrics.seed_count'), watershed_stats.get('num_markers', 0))
                     with col2:
-                        st.metric("高冲突像素", watershed_stats.get('high_conflict_pixels', 0))
+                        st.metric(t('metrics.high_conflict_pixels'), watershed_stats.get('high_conflict_pixels', 0))
                 elif watershed_stats:
                     reason = watershed_stats.get('reason', 'unknown')
                     if reason == 'no_image':
-                        st.info("ℹ️ 分水岭细化：未提供原始图像")
+                        st.info(t('messages.watershed_no_image'))
                     elif reason == 'no_markers':
-                        st.warning("⚠️ 分水岭细化：未找到确定种子")
+                        st.warning(t('messages.watershed_no_seeds'))
                     elif reason == 'disabled_or_no_conflict':
-                        st.info("ℹ️ 分水岭细化：未启用或无高冲突区域")
+                        st.info(t('messages.watershed_not_enabled'))
                     else:
-                        st.warning(f"⚠️ 分水岭细化失败：{reason}")
+                        st.warning(t('messages.watershed_refinement_failed', reason=reason))
 
                 # 详细融合结果
-                with st.expander("📋 查看详细融合结果", expanded=False):
+                with st.expander(t('fusion.view_detailed_results'), expanded=False):
                     if len(dst_stats['fusion_results']) > 0:
                         import pandas as pd
                         results_df = pd.DataFrame(dst_stats['fusion_results'])
@@ -1037,217 +1158,607 @@ def run_fusion_pipeline(image, selected_models, strategy, iou_threshold, min_vot
                         # 下载按钮
                         csv = results_df.to_csv(index=False)
                         st.download_button(
-                            label="📥 下载DST融合结果CSV",
+                            label=t('fusion.download_dst_csv'),
                             data=csv,
                             file_name="dst_fusion_results.csv",
                             mime="text/csv"
                         )
 
         # 6. 统计信息
-        st.subheader("📈 统计信息")
+        st.subheader(t('common.statistics_summary'))
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            st.metric("检测细胞数", np.max(fused_mask))
+            st.metric(t('metrics.detected_cells'), np.max(fused_mask))
         with col2:
-            st.metric("模型一致性", f"{consistency_score:.2%}")
+            st.metric(t('metrics.model_consistency'), f"{consistency_score:.2%}")
         with col3:
-            st.metric("平均模型IoU", f"{avg_consistency:.2%}")
+            st.metric(t('metrics.average_model_iou'), f"{avg_consistency:.2%}")
 
         # 7. 导出选项
-        st.subheader("💾 导出结果")
-        st.info("导出功能开发中...")
+        st.subheader(t('common.export_results'))
 
+        # 创建导出选项卡
+        export_tabs = st.tabs([t('fusion.export_mask_tab'), t('fusion.export_stats_tab'), t('fusion.export_viz_tab'), t('fusion.export_conflict_tab')])
+
+        # Tab 1: 掩码导出
+        with export_tabs[0]:
+            st.markdown(f"#### {t('fusion.export_fusion_mask_title')}")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                # PNG格式导出（彩色可视化）
+                from io import BytesIO
+                from skimage.color import label2rgb
+
+                fused_display = label2rgb(fused_mask, bg_label=0)
+                fused_img = Image.fromarray((fused_display * 255).astype(np.uint8))
+                buf_png = BytesIO()
+                fused_img.save(buf_png, format='PNG')
+
+                st.download_button(
+                    label=t('fusion.download_png_color'),
+                    data=buf_png.getvalue(),
+                    file_name=f"fused_mask_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
+                    mime="image/png",
+                    use_container_width=True
+                )
+                st.caption(t('fusion.png_caption'))
+
+            with col2:
+                # TIFF格式导出（原始标签）
+                from PIL import Image as PILImage
+
+                # 将标签掩码转换为16位整数（支持更多标签）
+                fused_mask_16bit = fused_mask.astype(np.uint16)
+                mask_img = PILImage.fromarray(fused_mask_16bit)
+                buf_tiff = BytesIO()
+                mask_img.save(buf_tiff, format='TIFF')
+
+                st.download_button(
+                    label=t('fusion.download_tiff_label'),
+                    data=buf_tiff.getvalue(),
+                    file_name=f"fused_mask_{datetime.now().strftime('%Y%m%d_%H%M%S')}.tiff",
+                    mime="image/tiff",
+                    use_container_width=True
+                )
+                st.caption(t('fusion.tiff_caption'))
+
+        # Tab 2: 统计报告导出
+        with export_tabs[1]:
+            st.markdown(f"#### {t('fusion.export_stats_title')}")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                # JSON格式导出
+                import json
+
+                # 准备导出数据
+                export_data = {
+                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'basic_stats': {
+                        'total_cells': int(np.max(fused_mask)),
+                        'model_consistency': float(consistency_score),
+                        'average_model_iou': float(avg_consistency)
+                    },
+                    'models_used': model_names
+                }
+
+                # 如果使用了DST融合，添加DST统计信息
+                if dst_stats is not None:
+                    export_data['dst_stats'] = {
+                        'total_groups': dst_stats['total_groups'],
+                        'fused_count': dst_stats['fused_count'],
+                        'skipped_count': dst_stats['skipped_count'],
+                        'high_conflict_count': dst_stats['high_conflict_count'],
+                        'average_conflict': float(dst_stats['average_conflict']),
+                        'average_uncertainty': float(dst_stats['average_uncertainty']),
+                        'confidence_distribution': {k: float(v) for k, v in dst_stats['confidence_distribution'].items()},
+                        'conflict_distribution': {k: float(v) for k, v in dst_stats['conflict_distribution'].items()},
+                        'strategy_counts': dst_stats.get('strategy_counts', {})
+                    }
+
+                json_str = json.dumps(export_data, indent=2, ensure_ascii=False)
+
+                st.download_button(
+                    label=t('fusion.download_json'),
+                    data=json_str,
+                    file_name=f"fusion_stats_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+                st.caption(t('fusion.json_caption'))
+
+            with col2:
+                # Excel格式导出
+                import pandas as pd
+
+                # 创建Excel writer
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    # Sheet 1: 基本统计
+                    basic_df = pd.DataFrame({
+                        '指标': ['检测细胞数', '模型一致性', '平均模型IoU', '使用模型数'],
+                        '值': [
+                            int(np.max(fused_mask)),
+                            f"{consistency_score:.2%}",
+                            f"{avg_consistency:.2%}",
+                            len(model_names)
+                        ]
+                    })
+                    basic_df.to_excel(writer, sheet_name='基本统计', index=False)
+
+                    # Sheet 2: DST详细结果（如果有）
+                    if dst_stats is not None and len(dst_stats['fusion_results']) > 0:
+                        results_df = pd.DataFrame(dst_stats['fusion_results'])
+                        results_df.to_excel(writer, sheet_name='DST融合结果', index=False)
+
+                    # Sheet 3: 模型一致性矩阵
+                    consistency_df = pd.DataFrame(
+                        consistency_matrix,
+                        columns=[f"模型{i+1}" for i in range(len(model_names))],
+                        index=[f"模型{i+1}" for i in range(len(model_names))]
+                    )
+                    consistency_df.to_excel(writer, sheet_name='模型一致性矩阵')
+
+                st.download_button(
+                    label=t('fusion.download_excel'),
+                    data=output.getvalue(),
+                    file_name=f"fusion_stats_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+                st.caption(t('fusion.excel_caption'))
+
+        # Tab 3: 可视化图像导出
+        with export_tabs[2]:
+            st.markdown(f"#### {t('fusion.export_viz_title')}")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                # 导出不确定性热图
+                import matplotlib.pyplot as plt
+                import matplotlib
+                matplotlib.use('Agg')
+
+                fig, ax = plt.subplots(figsize=(10, 8))
+                im = ax.imshow(disagreement_map, cmap='hot', interpolation='nearest')
+                ax.set_title('Model Disagreement Heatmap', fontsize=14)
+                ax.axis('off')
+                plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+                buf_heatmap = BytesIO()
+                plt.savefig(buf_heatmap, format='png', dpi=300, bbox_inches='tight')
+                plt.close(fig)
+
+                st.download_button(
+                    label=t('fusion.download_disagreement_heatmap'),
+                    data=buf_heatmap.getvalue(),
+                    file_name=f"disagreement_heatmap_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
+                    mime="image/png",
+                    use_container_width=True
+                )
+                st.caption(t('fusion.disagreement_caption'))
+
+            with col2:
+                # 导出模型一致性矩阵图
+                fig, ax = plt.subplots(figsize=(8, 6))
+                im = ax.imshow(consistency_matrix, cmap='RdYlGn', vmin=0, vmax=1)
+                ax.set_xticks(range(len(model_names)))
+                ax.set_yticks(range(len(model_names)))
+                ax.set_xticklabels([f"M{i+1}" for i in range(len(model_names))])
+                ax.set_yticklabels([f"M{i+1}" for i in range(len(model_names))])
+                ax.set_title('Model Consistency Matrix', fontsize=14)
+
+                # 添加数值标注
+                for i in range(len(model_names)):
+                    for j in range(len(model_names)):
+                        text = ax.text(j, i, f'{consistency_matrix[i, j]:.2f}',
+                                     ha="center", va="center", color="black", fontsize=10)
+
+                plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+                buf_consistency = BytesIO()
+                plt.savefig(buf_consistency, format='png', dpi=300, bbox_inches='tight')
+                plt.close(fig)
+
+                st.download_button(
+                    label=t('fusion.download_consistency_matrix'),
+                    data=buf_consistency.getvalue(),
+                    file_name=f"consistency_matrix_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
+                    mime="image/png",
+                    use_container_width=True
+                )
+                st.caption(t('fusion.consistency_caption'))
+
+        # Tab 4: 高冲突报告导出
+        with export_tabs[3]:
+            st.markdown(f"#### {t('fusion.export_conflict_title')}")
+
+            if dst_stats is not None and dst_stats['high_conflict_count'] > 0:
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    # 导出高冲突实例列表（CSV）
+                    import pandas as pd
+
+                    conflict_df = pd.DataFrame(dst_stats['high_conflict_instances'])
+
+                    csv_data = conflict_df.to_csv(index=False)
+
+                    st.download_button(
+                        label=t('fusion.download_conflict_csv'),
+                        data=csv_data,
+                        file_name=f"high_conflict_instances_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                    st.caption(t('fusion.conflict_csv_caption', count=dst_stats['high_conflict_count']))
+
+                with col2:
+                    # 导出完整的冲突分析报告（Markdown）
+                    report_lines = [
+                        "# 模型融合冲突分析报告",
+                        f"\n生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                        f"\n## 总体统计",
+                        f"- 总实例组数: {dst_stats['total_groups']}",
+                        f"- 成功融合: {dst_stats['fused_count']}",
+                        f"- 跳过实例: {dst_stats['skipped_count']}",
+                        f"- 高冲突实例: {dst_stats['high_conflict_count']}",
+                        f"- 平均冲突度: {dst_stats['average_conflict']:.3f}",
+                        f"- 平均不确定性: {dst_stats['average_uncertainty']:.3f}",
+                        f"\n## 置信度分布",
+                        f"- 最小值: {dst_stats['confidence_distribution']['min']:.3f}",
+                        f"- 最大值: {dst_stats['confidence_distribution']['max']:.3f}",
+                        f"- 平均值: {dst_stats['confidence_distribution']['mean']:.3f}",
+                        f"- 标准差: {dst_stats['confidence_distribution']['std']:.3f}",
+                        f"\n## 冲突度分布",
+                        f"- 最小值: {dst_stats['conflict_distribution']['min']:.3f}",
+                        f"- 最大值: {dst_stats['conflict_distribution']['max']:.3f}",
+                        f"- 平均值: {dst_stats['conflict_distribution']['mean']:.3f}",
+                        f"- 标准差: {dst_stats['conflict_distribution']['std']:.3f}",
+                        f"\n## 高冲突实例详情",
+                        "\n| 实例ID | 组索引 | 冲突度 | 不确定性 | 状态 |",
+                        "|--------|--------|--------|----------|------|"
+                    ]
+
+                    for instance in dst_stats['high_conflict_instances']:
+                        report_lines.append(
+                            f"| {instance['instance_id']} | {instance['group_idx']} | "
+                            f"{instance['conflict']:.3f} | {instance['uncertainty']:.3f} | "
+                            f"{instance['status']} |"
+                        )
+
+                    report_text = "\n".join(report_lines)
+
+                    st.download_button(
+                        label=t('fusion.download_conflict_report'),
+                        data=report_text,
+                        file_name=f"conflict_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                        mime="text/markdown",
+                        use_container_width=True
+                    )
+                    st.caption(t('fusion.conflict_report_caption'))
+
+            else:
+                st.info(t('fusion.no_conflict_info'))
+                st.caption(t('fusion.no_conflict_hint'))
+
+    # 存储结果到session state，防止下载按钮导致页面重置
+    st.session_state['fusion_results'] = {
+        'fused_mask': fused_mask,
+        'disagreement_map': disagreement_map,
+        'consistency_matrix': consistency_matrix,
+        'consistency_score': consistency_score,
+        'avg_consistency': avg_consistency,
+        'dst_stats': dst_stats,
+        'model_names': model_names,
+        'masks_list': masks_list,
+        'image': image,
+        'matched_groups': matched_groups,
+        'postprocess_options': postprocess_options,
+        'individual_cells': individual_cells,
+        'cell_info': cell_info,
+        'morphology_features': morphology_features
+    }
+
+
+# 页面标题和语言切换器
+col_title, col_spacer, col_lang = st.columns([3, 1, 1])
+
+with col_title:
+    st.title(t('app.title'))
+
+with col_lang:
+    i18n = get_i18n()
+    current_lang = i18n.get_current_language()
+
+    selected_lang = st.radio(
+        "🌐",
+        options=['en_US', 'zh_CN'],
+        format_func=lambda x: 'English' if x == 'en_US' else '中文',
+        index=0 if current_lang == 'en_US' else 1,
+        horizontal=True,
+        key="language_radio",
+        label_visibility="collapsed"
+    )
+
+    if selected_lang != current_lang:
+        i18n.set_language(selected_lang)
+        st.rerun()
+
+# GPU状态显示
+if GPU_AVAILABLE and GPU_COMPATIBLE:
+    st.success(t('messages.gpu_available', gpu_name=GPU_NAME))
+elif GPU_AVAILABLE and not GPU_COMPATIBLE:
+    st.error(t('messages.gpu_incompatible', gpu_name=GPU_NAME, version=torch.__version__))
+else:
+    st.info(t('messages.gpu_unavailable'))
+
+# 帮助文档
+with st.expander(t('app.help_title'), expanded=False):
+    st.markdown(f"### {t('help.overview.title')}")
+    st.write(t('help.overview.content'))
+
+    st.markdown("---")
+
+    # 显示所有标签页的帮助信息
+    for i in range(1, 11):
+        tab_key = f'tab{i}'
+        st.markdown(f"### {t(f'help.{tab_key}.title')}")
+        st.write(t(f'help.{tab_key}.description'))
+
+        st.markdown(f"**{t('help.features_label')}**")
+        features = t(f'help.{tab_key}.features')
+        if isinstance(features, list):
+            for feature in features:
+                st.markdown(f"- {feature}")
+
+        st.markdown(f"**{t('help.usage_label')}**")
+        st.write(t(f'help.{tab_key}.usage'))
+
+        if i < 10:
+            st.markdown("")
+
+    st.markdown("---")
+
+    # GPU加速说明
+    st.markdown(f"### {t('help.gpu.title')}")
+    st.write(t('help.gpu.description'))
+    st.markdown(f"**{t('help.requirements_label')}**")
+    requirements = t('help.gpu.requirements')
+    if isinstance(requirements, list):
+        for req in requirements:
+            st.markdown(f"- {req}")
+    st.info(t('help.gpu.performance'))
+
+    st.markdown("---")
+
+    # 提示与最佳实践
+    st.markdown(f"### {t('help.tips.title')}")
+
+    st.markdown(f"**{t('help.general_tips_label')}**")
+    general_tips = t('help.tips.general')
+    if isinstance(general_tips, list):
+        for tip in general_tips:
+            st.markdown(f"- {tip}")
+
+    st.markdown(f"**{t('help.recommended_workflow_label')}**")
+    workflow = t('help.tips.workflow')
+    if isinstance(workflow, list):
+        for step in workflow:
+            st.markdown(f"- {step}")
+
+    st.markdown(f"**{t('help.performance_tips_label')}**")
+    performance = t('help.tips.performance')
+    if isinstance(performance, list):
+        for tip in performance:
+            st.markdown(f"- {tip}")
 
 # 创建标签页
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📤 图像分割", "🔍 对比模式", "🔀 模型融合", "📦 批量处理", "🔬 细胞形态学提取", "🔍 异常检测", "📊 聚类分析"])
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
+    t('tabs.image_segmentation'),
+    t('tabs.comparison_mode'),
+    t('tabs.model_fusion'),
+    t('tabs.batch_processing'),
+    t('tabs.cell_morphology'),
+    t('tabs.anomaly_detection'),
+    t('tabs.clustering_analysis'),
+    t('tabs.supervised_learning'),
+    t('tabs.active_learning'),
+    t('tabs.virtual_screening')
+])
 
 # ==================== 标签页1: 图像分割 ====================
 with tab1:
     col_left, col_right = st.columns([1, 2])
 
     with col_left:
-        st.header("⚙️ 设置")
+        st.header(t('common.settings'))
 
         # 图像上传
         uploaded_file = st.file_uploader(
-            "上传细胞图像",
+            t('common.upload_image'),
             type=["png", "jpg", "jpeg", "tif", "tiff"],
             key="single_upload"
         )
 
         # 像素大小设置
-        st.write("**📏 像素大小设置**")
+        st.write(f"**{t('segmentation.pixel_size_setting')}**")
         pixel_size = st.number_input(
-            "像素大小 (μm/pixel)",
+            t('segmentation.pixel_size'),
             min_value=0.01,
             max_value=10.0,
             value=0.65,
             step=0.01,
-            help="输入显微镜的像素大小，用于计算实际物理尺寸"
+            help=t('segmentation.pixel_size_help')
         )
         st.session_state['pixel_size'] = pixel_size
 
         # 预处理选项
-        with st.expander("🔧 预处理选项", expanded=False):
-            denoise = st.checkbox("去噪处理", value=False, help="使用高斯滤波去除噪声")
-            enhance = st.checkbox("对比度增强", value=False, help="使用CLAHE增强对比度")
-            normalize = st.checkbox("归一化", value=False, help="归一化像素值到0-255")
+        with st.expander(t('segmentation.preprocessing'), expanded=False):
+            denoise = st.checkbox(t('segmentation.denoise'), value=False, help=t('segmentation.denoise_help'))
+            enhance = st.checkbox(t('segmentation.enhance'), value=False, help=t('segmentation.enhance_help'))
+            normalize = st.checkbox(t('segmentation.normalize'), value=False, help=t('segmentation.normalize_help'))
 
         # 后处理选项
-        with st.expander("🔬 后处理选项", expanded=False):
-            closing = st.checkbox("区域闭合", value=True, help="使用形态学闭运算填充细胞边界间隙")
+        with st.expander(t('segmentation.postprocessing'), expanded=False):
+            closing = st.checkbox(t('segmentation.region_closing'), value=True, help=t('segmentation.region_closing_help'))
             if closing:
-                closing_kernel_size = st.slider("闭运算核大小", 3, 15, 3, 2, help="核越大，填充的间隙越大")
+                closing_kernel_size = st.slider(t('segmentation.closing_kernel_size'), 3, 15, 3, 2, help=t('segmentation.closing_kernel_help'))
             else:
                 closing_kernel_size = 5
 
-            extract_cells = st.checkbox("提取单个细胞", value=False, help="提取并保存单个细胞样本，用于机器学习训练")
+            extract_cells = st.checkbox(t('segmentation.extract_cells'), value=False, help=t('segmentation.extract_cells_help'))
             if extract_cells:
-                min_cell_area = st.slider("最小细胞面积", 50, 500, 50, 10, help="过滤掉面积小于此值的区域")
+                min_cell_area = st.slider(t('segmentation.min_cell_area'), 50, 500, 50, 10, help=t('segmentation.min_cell_area_help'))
 
-            extract_morphology = st.checkbox("提取形态学特征", value=False, help="提取单个细胞的几何形态学特征（面积、周长、圆度等）")
+            extract_morphology = st.checkbox(t('segmentation.extract_features'), value=False, help=t('segmentation.extract_features_help'))
 
             # 高级特征提取选项
-            use_advanced_features = st.checkbox("使用高级特征提取", value=False, help="提取更高级的形态学、纹理和强度特征")
+            use_advanced_features = st.checkbox(t('segmentation.advanced_features'), value=False, help=t('segmentation.advanced_features_help'))
             if use_advanced_features:
-                st.caption("**高级特征类别**")
-                include_hu_moments = st.checkbox("Hu矩特征", value=True, help="7个旋转、缩放、平移不变的形状描述符")
-                include_intensity = st.checkbox("强度统计特征", value=True, help="灰度统计（均值、标准差、偏度、峰度、熵）")
-                include_texture = st.checkbox("纹理特征(GLCM)", value=True, help="基于灰度共生矩阵的Haralick纹理特征")
-                include_boundary = st.checkbox("边界复杂度特征", value=True, help="边界粗糙度、凹凸性分析")
-                include_advanced_shape = st.checkbox("高级形状特征", value=True, help="椭圆度、伸长度、分形维数等")
+                st.caption(f"**{t('segmentation.advanced_feature_categories')}**")
+                include_hu_moments = st.checkbox(t('segmentation.hu_moments'), value=True, help=t('segmentation.hu_moments_help'))
+                include_intensity = st.checkbox(t('segmentation.intensity_stats'), value=True, help=t('segmentation.intensity_stats_help'))
+                include_texture = st.checkbox(t('segmentation.texture_glcm'), value=True, help=t('segmentation.texture_glcm_help'))
+                include_boundary = st.checkbox(t('segmentation.boundary_complexity'), value=True, help=t('segmentation.boundary_complexity_help'))
+                include_advanced_shape = st.checkbox(t('segmentation.advanced_shape'), value=True, help=t('segmentation.advanced_shape_help'))
 
         # 分割方法选择
-        st.subheader("📐 分割方法")
+        st.subheader(t('segmentation.method'))
         method = st.selectbox(
-            "选择方法",
-            ["Otsu阈值", "自适应阈值", "分水岭算法", "Canny边缘检测", "Cellpose深度学习", "CellViT深度学习", "CellSAM深度学习"],
+            t('segmentation.select_method'),
+            [t('methods.otsu'), t('methods.adaptive'), t('methods.watershed'),
+             t('methods.canny'), t('methods.cellpose'), t('methods.cellvit'), t('methods.cellsam')],
             index=4  # 默认选择Cellpose深度学习
         )
 
         # 方法参数（直接显示，不使用折叠面板）
-        if method == "自适应阈值":
-            st.write("**方法参数**")
-            block_size = st.slider("块大小", 3, 51, 11, 2)
-            C = st.slider("常数C", 0, 20, 2)
+        if method == t('methods.adaptive'):
+            st.write(f"**{t('segmentation.method_params')}**")
+            block_size = st.slider(t('segmentation.block_size'), 3, 51, 11, 2)
+            C = st.slider(t('segmentation.constant_c'), 0, 20, 2)
             params = {"block_size": block_size, "C": C}
-        elif method == "Canny边缘检测":
-            st.write("**方法参数**")
-            low_threshold = st.slider("低阈值", 0, 200, 50, 10)
-            high_threshold = st.slider("高阈值", 0, 300, 150, 10)
+        elif method == t('methods.canny'):
+            st.write(f"**{t('segmentation.method_params')}**")
+            low_threshold = st.slider(t('segmentation.low_threshold'), 0, 200, 50, 10)
+            high_threshold = st.slider(t('segmentation.high_threshold'), 0, 300, 150, 10)
             params = {"low_threshold": low_threshold, "high_threshold": high_threshold}
-        elif method == "Cellpose深度学习":
-            st.write("**方法参数**")
-            model_type = st.selectbox("模型类型", ["cyto2", "cyto", "nuclei"],
-                                     help="cyto2: 细胞质模型(推荐), cyto: 旧版细胞质模型, nuclei: 细胞核模型")
-            diameter = st.slider("细胞直径(像素)", 0, 100, 30, 5,
-                                help="设置为0则自动检测")
+        elif method == t('methods.cellpose'):
+            st.write(f"**{t('segmentation.method_params')}**")
+            model_type = st.selectbox(t('segmentation.model_type'), ["cyto2", "cyto", "nuclei"],
+                                     help=t('segmentation.model_type_help'))
+            diameter = st.slider(t('segmentation.cell_diameter'), 0, 100, 30, 5,
+                                help=t('segmentation.cell_diameter_help'))
             if diameter == 0:
                 diameter = None
 
             # GPU选项
             if GPU_AVAILABLE and GPU_COMPATIBLE:
-                use_gpu = st.checkbox(f"🚀 使用GPU加速 ({GPU_NAME})", value=True,
-                                     help="启用GPU可大幅提升处理速度（10-50倍）")
+                use_gpu = st.checkbox(t('segmentation.use_gpu', gpu_name=GPU_NAME), value=True,
+                                     help=t('segmentation.use_gpu_help'))
             elif GPU_AVAILABLE and not GPU_COMPATIBLE:
                 use_gpu = False
-                st.error(f"⚠️ GPU不兼容: {GPU_WARNING}")
-                st.info("💡 将使用CPU模式处理（速度较慢但稳定）")
+                st.error(t('segmentation.gpu_incompatible', warning=GPU_WARNING))
+                st.info(t('segmentation.gpu_cpu_mode'))
             else:
                 use_gpu = False
-                st.info("ℹ️ GPU不可用，将使用CPU处理")
+                st.info(t('messages.gpu_unavailable'))
 
             # 高级参数
-            with st.expander("⚙️ 高级参数", expanded=False):
-                batch_size = st.slider("批处理大小", 1, 64, 8, 1,
-                                      help="处理大图像时的批处理大小，增大可提高速度但需要更多内存")
-                use_normalize = st.checkbox("启用图像归一化", value=True,
-                                           help="对图像进行归一化处理，可改善分割质量")
+            with st.expander(t('segmentation.advanced_params'), expanded=False):
+                batch_size = st.slider(t('segmentation.batch_size'), 1, 64, 8, 1,
+                                      help=t('segmentation.batch_size_help'))
+                use_normalize = st.checkbox(t('segmentation.enable_normalize'), value=True,
+                                           help=t('segmentation.enable_normalize_help'))
                 if use_normalize:
-                    tile_norm_blocksize = st.slider("归一化块大小", 0, 256, 64, 16,
-                                                   help="0表示全局归一化，>0表示分块归一化")
+                    tile_norm_blocksize = st.slider(t('segmentation.normalize_block_size'), 0, 256, 64, 16,
+                                                   help=t('segmentation.normalize_block_size_help'))
                     normalize = {"tile_norm_blocksize": tile_norm_blocksize}
                 else:
                     normalize = None
 
             params = {"model_type": model_type, "diameter": diameter, "use_gpu": use_gpu,
                      "batch_size": batch_size, "normalize": normalize}
-        elif method == "CellViT深度学习":
-            st.write("**方法参数**")
+        elif method == t('methods.cellvit'):
+            st.write(t('segmentation.method_params_title'))
 
             # 环境检查
             if not CELLVIT_ENV_OK:
-                st.error(f"⚠️ CellViT专用环境未找到！")
-                st.warning("CellViT需要专用环境。请按以下步骤创建：")
+                st.error(t('messages.cellvit_env_not_found'))
+                st.warning(t('messages.cellvit_env_required'))
                 st.code("conda create --prefix ./env_cellvit python=3.12 -y\nsource activate ./env_cellvit\npip install cellvit torch torchvision", language="bash")
-                st.info("💡 或者选择其他分割方法（如Cellpose）")
+                st.info(t('messages.cellvit_alternative'))
             else:
-                st.success(f"✅ CellViT专用环境已就绪 (将自动调用 {CELLVIT_ENV_STATUS})")
+                st.success(t('messages.cellvit_env_ready').format(env=CELLVIT_ENV_STATUS))
 
-            model_type = st.selectbox("模型类型", ["CellViT-256"],
-                                     help="CellViT-256: 基于Vision Transformer的细胞核分割模型")
-            target_size = st.slider("目标图像大小", 256, 1024, 512, 64,
-                                   help="图像会被调整到此大小进行处理。较大的值可检测更多小细胞，但处理更慢。推荐512-768")
+            model_type = st.selectbox(t('segmentation.model_type'), ["CellViT-256"],
+                                     help=t('segmentation.model_type_help'))
+            target_size = st.slider(t('segmentation.target_size'), 256, 1024, 512, 64,
+                                   help=t('segmentation.target_size_help'))
 
             # GPU选项
             if GPU_AVAILABLE and GPU_COMPATIBLE:
-                use_gpu = st.checkbox(f"🚀 使用GPU加速 ({GPU_NAME})", value=True,
-                                     help="CellViT推荐使用GPU（需要8GB+ VRAM）")
+                use_gpu = st.checkbox(t('segmentation.use_gpu').format(gpu_name=GPU_NAME), value=True,
+                                     help=t('messages.cellvit_recommended_gpu'))
             elif GPU_AVAILABLE and not GPU_COMPATIBLE:
                 use_gpu = False
-                st.error(f"⚠️ GPU不兼容: {GPU_WARNING}")
-                st.info("💡 将使用CPU模式处理（速度较慢）")
+                st.error(t('segmentation.gpu_incompatible').format(warning=GPU_WARNING))
+                st.info(t('messages.gpu_cpu_mode'))
             else:
                 use_gpu = False
-                st.info("ℹ️ GPU不可用，将使用CPU处理")
+                st.info(t('messages.gpu_unavailable'))
 
             params = {"model_type": model_type, "target_size": target_size, "use_gpu": use_gpu}
-        elif method == "CellSAM深度学习":
-            st.write("**方法参数**")
+        elif method == t('methods.cellsam'):
+            st.write(t('segmentation.method_params_title'))
 
             # 提示信息
-            st.info("ℹ️ CellSAM直接在当前环境中运行。首次使用需要下载模型文件到 models/sam/ 目录")
+            st.info(t('messages.cellsam_info'))
 
-            model_type = st.selectbox("模型类型", ["vit_b", "vit_l", "vit_h"],
-                                     help="vit_b: 基础模型(91M参数), vit_l: 大模型(308M), vit_h: 超大模型(636M)")
-            points_per_side = st.slider("提示点密度", 16, 64, 32, 8,
-                                       help="每边生成的提示点数量。较大的值可检测更多细胞，但处理更慢。推荐32")
+            model_type = st.selectbox(t('segmentation.model_type'), ["vit_b", "vit_l", "vit_h"],
+                                     help=t('segmentation.sam_model_type_help'))
+            points_per_side = st.slider(t('segmentation.points_per_side'), 16, 64, 32, 8,
+                                       help=t('segmentation.points_per_side_help'))
 
             # GPU选项
             if GPU_AVAILABLE and GPU_COMPATIBLE:
-                use_gpu = st.checkbox(f"🚀 使用GPU加速 ({GPU_NAME})", value=True,
-                                     help="CellSAM推荐使用GPU（需要4GB+ VRAM）")
+                use_gpu = st.checkbox(t('segmentation.use_gpu').format(gpu_name=GPU_NAME), value=True,
+                                     help=t('messages.cellsam_recommended_gpu'))
             elif GPU_AVAILABLE and not GPU_COMPATIBLE:
                 use_gpu = False
-                st.error(f"⚠️ GPU不兼容: {GPU_WARNING}")
-                st.info("💡 将使用CPU模式处理（速度较慢）")
+                st.error(t('segmentation.gpu_incompatible').format(warning=GPU_WARNING))
+                st.info(t('messages.gpu_cpu_mode'))
             else:
                 use_gpu = False
-                st.info("ℹ️ GPU不可用，将使用CPU处理")
+                st.info(t('messages.gpu_unavailable'))
 
             params = {"model_type": model_type, "points_per_side": points_per_side, "use_gpu": use_gpu}
         else:
             params = {}
 
-        segment_btn = st.button("🚀 开始分割", type="primary", use_container_width=True)
+        segment_btn = st.button(t('common.start_processing'), type="primary", use_container_width=True)
 
     with col_right:
         if uploaded_file is not None:
             image = Image.open(uploaded_file)
             image_np = np.array(image)
 
-            st.subheader("📷 原始图像")
+            st.subheader(t('common.original_image'))
             st.image(image, width=400)
-            st.caption(f"尺寸: {image_np.shape}")
+            st.caption(t('common.image_size', shape=image_np.shape))
 
             if segment_btn:
-                st.subheader("📊 分割结果")
+                st.subheader(t('common.segmentation_result'))
 
                 # 根据方法显示不同的进度提示
-                spinner_text = "正在处理..."
-                if not comparison_mode and method == "Cellpose深度学习":
-                    spinner_text = "🧠 正在使用Cellpose深度学习模型处理，请稍候..."
+                spinner_text = t('common.processing')
+                if method == t('methods.cellpose'):
+                    spinner_text = t('messages.processing_cellpose')
 
                 with st.spinner(spinner_text):
                     try:
@@ -1266,19 +1777,19 @@ with tab1:
                         }
 
                         # 为Cellpose创建进度条
-                        if method == "Cellpose深度学习":
+                        if method == t('methods.cellpose'):
                             cellpose_progress = st.progress(0)
-                            st.caption("🧠 Cellpose处理进度")
+                            st.caption(t('common.cellpose_progress_caption'))
                             params['progress_bar'] = cellpose_progress
 
                         result = segment_single_image(image_np, method, params, preprocess_options, postprocess_options)
 
                         # 清除Cellpose进度条
-                        if method == "Cellpose深度学习":
+                        if method == t('methods.cellpose'):
                             cellpose_progress.empty()
 
                         # 显示结果
-                        tab_mask, tab_overlay = st.tabs(["分割掩码", "叠加显示"])
+                        tab_mask, tab_overlay = st.tabs([t('common.mask_display'), t('common.overlay_display')])
 
                         with tab_mask:
                             st.image(result['mask'], use_container_width=True)
@@ -1287,24 +1798,24 @@ with tab1:
                             st.image(result['overlay'], use_container_width=True)
 
                         # 统计信息
-                        st.success("✅ 分割完成！")
+                        st.success(t('common.segmentation_completed'))
 
                         col_a, col_b, col_c = st.columns(3)
                         with col_a:
-                            st.metric("前景像素", f"{result['foreground_pixels']:,}")
+                            st.metric(t('metrics.foreground_pixels'), f"{result['foreground_pixels']:,}")
                         with col_b:
-                            st.metric("前景比例", f"{result['foreground_ratio']:.2f}%")
+                            st.metric(t('metrics.foreground_ratio'), f"{result['foreground_ratio']:.2f}%")
                         with col_c:
-                            st.metric("处理时间", f"{result['processing_time']*1000:.2f} ms")
+                            st.metric(t('metrics.processing_time'), f"{result['processing_time']*1000:.2f} ms")
 
                         if result['num_regions'] is not None:
-                            st.info(f"🔍 检测到 {result['num_regions']} 个细胞区域")
+                            st.info(t('messages.cells_detected', count=result['num_regions']))
 
                         # 细胞形态学特征提取
                         if (extract_morphology or use_advanced_features) and result['num_regions'] is not None and result['num_regions'] > 0:
-                            st.subheader("📊 细胞形态学特征分析")
+                            st.subheader(t('common.morphology_analysis'))
 
-                            with st.spinner("正在提取细胞特征..."):
+                            with st.spinner(t('common.extracting_features')):
                                 # 提取特征（使用与单个细胞提取相同的min_area过滤）
                                 pixel_size = st.session_state.get('pixel_size', 1.0)
                                 min_area = postprocess_options.get('min_cell_area', 100)
@@ -1329,29 +1840,29 @@ with tab1:
                                         include_boundary=include_boundary,
                                         include_advanced_shape=include_advanced_shape
                                     )
-                                    st.success("✅ 高级特征提取完成！")
+                                    st.success(t('messages.advanced_features_completed'))
                                 else:
                                     # 使用基础特征提取
                                     features_df = extract_cell_features(result['labeled_mask'], pixel_size=pixel_size, min_area=min_area)
 
                                 if not features_df.empty:
                                     # 显示特征统计
-                                    st.write("**特征统计摘要**")
+                                    st.write(t('common.feature_statistics_title'))
                                     stats = get_feature_statistics(features_df)
 
                                     # 显示关键特征的统计信息
                                     col1, col2, col3, col4 = st.columns(4)
                                     with col1:
-                                        st.metric("平均面积", f"{stats['area_um2']['mean']:.1f} μm²")
+                                        st.metric(t('metrics.average_area'), f"{stats['area_um2']['mean']:.1f} μm²")
                                     with col2:
-                                        st.metric("平均圆度", f"{stats['circularity']['mean']:.3f}")
+                                        st.metric(t('metrics.average_circularity'), f"{stats['circularity']['mean']:.3f}")
                                     with col3:
-                                        st.metric("平均长轴", f"{stats['major_axis_length']['mean']:.1f} μm")
+                                        st.metric(t('metrics.average_major_axis'), f"{stats['major_axis_length']['mean']:.1f} μm")
                                     with col4:
-                                        st.metric("平均短轴", f"{stats['minor_axis_length']['mean']:.1f} μm")
+                                        st.metric(t('metrics.average_minor_axis'), f"{stats['minor_axis_length']['mean']:.1f} μm")
 
                                     # 显示详细特征表格
-                                    with st.expander("📋 查看详细特征数据", expanded=False):
+                                    with st.expander(t('common.view_detailed_features'), expanded=False):
                                         # ID说明
                                         st.info("""
                                         **📌 关于细胞ID：**
@@ -1368,7 +1879,7 @@ with tab1:
                                         # 选择要显示的列
                                         if use_advanced_features:
                                             # 高级特征模式：显示所有列
-                                            st.caption("💡 **提示**：表格支持横向滚动，可以拖动查看所有列")
+                                            st.caption(t('morphology.table_scroll_hint'))
                                             st.dataframe(features_df.round(3), use_container_width=True, height=400)
                                         else:
                                             # 基础特征模式：只显示主要列
@@ -1408,7 +1919,7 @@ with tab1:
                             if 'cell_features' in st.session_state and not st.session_state['cell_features'].empty:
                                 csv_data = st.session_state['cell_features'].to_csv(index=False)
                                 st.download_button(
-                                    "📊 下载特征数据",
+                                    t('common.download_features'),
                                     data=csv_data,
                                     file_name=f"cell_features_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                                     mime="text/csv"
@@ -1416,15 +1927,15 @@ with tab1:
 
                         # 单个细胞提取结果
                         if result['individual_cells'] is not None and len(result['individual_cells']) > 0:
-                            st.subheader("🧬 单个细胞样本")
-                            st.info(f"✅ 成功提取 {len(result['individual_cells'])} 个细胞样本")
+                            st.subheader(t('common.individual_cells'))
+                            st.info(t('messages.successfully_extracted_cells', count=len(result['individual_cells'])))
 
                             # 显示前几个细胞样本
-                            st.write("**样本预览（前6个）：**")
+                            st.write(t('common.sample_preview'))
                             cols_preview = st.columns(6)
                             for idx, cell_data in enumerate(result['individual_cells'][:6]):
                                 with cols_preview[idx]:
-                                    st.image(cell_data['image'], caption=f"细胞 {idx+1}", use_container_width=True)
+                                    st.image(cell_data['image'], caption=t('common.cell_number', number=idx+1), use_container_width=True)
 
                             # 导出单个细胞样本
                             cells_zip_buffer = io.BytesIO()
@@ -1446,7 +1957,7 @@ with tab1:
                                     zip_file.writestr("cells_info.csv", csv_buffer.getvalue())
 
                             st.download_button(
-                                "📦 下载所有细胞样本(ZIP)",
+                                t('common.download_all_cells'),
                                 data=cells_zip_buffer.getvalue(),
                                 file_name=f"cells_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
                                 mime="application/zip",
@@ -1454,99 +1965,99 @@ with tab1:
                             )
 
                     except Exception as e:
-                        st.error(f"❌ 分割失败: {str(e)}")
+                        st.error(f"❌ {t('common.error')}: {str(e)}")
         else:
-            st.info("👈 请在左侧上传细胞图像")
+            st.info(t('common.please_upload_left'))
 
 # ==================== 标签页2: 对比模式 ====================
 with tab2:
-    st.header("🔍 对比模式")
-    st.caption("同时使用多种方法进行分割对比，快速评估不同算法的效果")
+    st.header(t('tabs.comparison_mode'))
+    st.caption(t('comparison.description'))
 
     col_left, col_right = st.columns([1, 2])
 
     with col_left:
-        st.subheader("⚙️ 设置")
+        st.subheader(t('common.settings'))
 
         # 图像上传
         uploaded_file = st.file_uploader(
-            "上传细胞图像",
+            t('common.upload_image'),
             type=["png", "jpg", "jpeg", "tif", "tiff"],
             key="comparison_upload"
         )
 
         # 像素大小设置
-        st.write("**📏 像素大小设置**")
+        st.write(f"**{t('segmentation.pixel_size_setting')}**")
         pixel_size = st.number_input(
-            "像素大小 (μm/pixel)",
+            t('segmentation.pixel_size'),
             min_value=0.01,
             max_value=10.0,
             value=0.65,
             step=0.01,
-            help="输入显微镜的像素大小，用于计算实际物理尺寸",
+            help=t('segmentation.pixel_size_help'),
             key="comparison_pixel_size"
         )
         st.session_state['pixel_size'] = pixel_size
 
         # 预处理选项
-        with st.expander("🔧 预处理选项", expanded=False):
-            denoise = st.checkbox("去噪处理", value=False, help="使用高斯滤波去除噪声", key="comparison_denoise")
-            enhance = st.checkbox("对比度增强", value=False, help="使用CLAHE增强对比度", key="comparison_enhance")
-            normalize = st.checkbox("归一化", value=False, help="归一化像素值到0-255", key="comparison_normalize")
+        with st.expander(t('segmentation.preprocessing'), expanded=False):
+            denoise = st.checkbox(t('segmentation.denoise'), value=False, help=t('segmentation.denoise_help'), key="comparison_denoise")
+            enhance = st.checkbox(t('segmentation.enhance'), value=False, help=t('segmentation.enhance_help'), key="comparison_enhance")
+            normalize = st.checkbox(t('segmentation.normalize'), value=False, help=t('segmentation.normalize_help'), key="comparison_normalize")
 
         # 后处理选项
-        with st.expander("🔬 后处理选项", expanded=False):
-            closing = st.checkbox("区域闭合", value=True, help="使用形态学闭运算填充细胞边界间隙", key="comparison_closing")
+        with st.expander(t('segmentation.postprocessing'), expanded=False):
+            closing = st.checkbox(t('segmentation.region_closing'), value=True, help=t('segmentation.region_closing_help'), key="comparison_closing")
             if closing:
-                closing_kernel_size = st.slider("闭运算核大小", 3, 15, 3, 2, help="核越大，填充的间隙越大", key="comparison_closing_size")
+                closing_kernel_size = st.slider(t('segmentation.closing_kernel_size'), 3, 15, 3, 2, help=t('segmentation.closing_kernel_help'), key="comparison_closing_size")
             else:
                 closing_kernel_size = 5
 
-            extract_cells = st.checkbox("提取单个细胞", value=False, help="提取并保存单个细胞样本", key="comparison_extract_cells")
+            extract_cells = st.checkbox(t('segmentation.extract_cells'), value=False, help=t('segmentation.extract_cells_help'), key="comparison_extract_cells")
             if extract_cells:
-                min_cell_area = st.slider("最小细胞面积", 50, 500, 50, 10, help="过滤掉面积小于此值的区域", key="comparison_min_area")
+                min_cell_area = st.slider(t('segmentation.min_cell_area'), 50, 500, 50, 10, help=t('segmentation.min_cell_area_help'), key="comparison_min_area")
             else:
                 min_cell_area = 100
 
-            extract_morphology = st.checkbox("提取形态学特征", value=False, help="提取单个细胞的几何形态学特征", key="comparison_extract_morph")
+            extract_morphology = st.checkbox(t('segmentation.extract_features'), value=False, help=t('segmentation.extract_features_help'), key="comparison_extract_morph")
 
         # 对比方法选择
-        st.subheader("📊 对比方法选择")
-        st.write("选择要对比的方法（至少2个）：")
+        st.subheader(t('common.comparison_method_selection'))
+        st.write(t('common.select_methods_to_compare'))
         comp_methods = []
-        if st.checkbox("Otsu阈值", value=True, key="comp_otsu_tab2"):
-            comp_methods.append("Otsu阈值")
-        if st.checkbox("自适应阈值", value=True, key="comp_adaptive_tab2"):
-            comp_methods.append("自适应阈值")
-        if st.checkbox("分水岭算法", value=False, key="comp_watershed_tab2"):
-            comp_methods.append("分水岭算法")
-        if st.checkbox("Canny边缘检测", value=False, key="comp_canny_tab2"):
-            comp_methods.append("Canny边缘检测")
-        if st.checkbox("Cellpose深度学习", value=False, key="comp_cellpose_tab2"):
-            comp_methods.append("Cellpose深度学习")
-        if st.checkbox("CellViT深度学习", value=False, key="comp_cellvit_tab2"):
-            comp_methods.append("CellViT深度学习")
-        if st.checkbox("CellSAM深度学习", value=False, key="comp_cellsam_tab2"):
-            comp_methods.append("CellSAM深度学习")
+        if st.checkbox(t('methods.otsu'), value=True, key="comp_otsu_tab2"):
+            comp_methods.append(t('methods.otsu'))
+        if st.checkbox(t('methods.adaptive'), value=True, key="comp_adaptive_tab2"):
+            comp_methods.append(t('methods.adaptive'))
+        if st.checkbox(t('methods.watershed'), value=False, key="comp_watershed_tab2"):
+            comp_methods.append(t('methods.watershed'))
+        if st.checkbox(t('methods.canny'), value=False, key="comp_canny_tab2"):
+            comp_methods.append(t('methods.canny'))
+        if st.checkbox(t('methods.cellpose'), value=False, key="comp_cellpose_tab2"):
+            comp_methods.append(t('methods.cellpose'))
+        if st.checkbox(t('methods.cellvit'), value=False, key="comp_cellvit_tab2"):
+            comp_methods.append(t('methods.cellvit'))
+        if st.checkbox(t('methods.cellsam'), value=False, key="comp_cellsam_tab2"):
+            comp_methods.append(t('methods.cellsam'))
 
-        segment_btn = st.button("🚀 开始对比", type="primary", use_container_width=True, key="comparison_segment_btn")
+        segment_btn = st.button(t('common.start_comparison'), type="primary", use_container_width=True, key="comparison_segment_btn")
 
     with col_right:
         if uploaded_file is not None:
             image = Image.open(uploaded_file)
             image_np = np.array(image)
 
-            st.subheader("📷 原始图像")
+            st.subheader(t('common.original_image'))
             st.image(image, width=400)
-            st.caption(f"尺寸: {image_np.shape}")
+            st.caption(t('common.image_size', shape=image_np.shape))
 
             if segment_btn:
-                st.subheader("📊 对比结果")
+                st.subheader(t('common.comparison_results'))
 
                 if len(comp_methods) < 2:
-                    st.warning("⚠️ 请至少选择2种方法进行对比")
+                    st.warning(t('messages.select_at_least_two_methods'))
                 else:
-                    with st.spinner("正在处理对比..."):
+                    with st.spinner(t('common.processing_comparison')):
                         try:
                             preprocess_options = {
                                 'denoise': denoise,
@@ -1564,23 +2075,23 @@ with tab2:
 
                             # 为每种方法设置默认参数
                             params_dict = {
-                                "Otsu阈值": {},
-                                "自适应阈值": {"block_size": 11, "C": 2},
-                                "分水岭算法": {},
-                                "Canny边缘检测": {"low_threshold": 50, "high_threshold": 150},
-                                "Cellpose深度学习": {
+                                t('methods.otsu'): {},
+                                t('methods.adaptive'): {"block_size": 11, "C": 2},
+                                t('methods.watershed'): {},
+                                t('methods.canny'): {"low_threshold": 50, "high_threshold": 150},
+                                t('methods.cellpose'): {
                                     "model_type": "cyto2",
                                     "diameter": None,
                                     "use_gpu": (GPU_AVAILABLE and GPU_COMPATIBLE),
                                     "batch_size": 8,
                                     "normalize": {"tile_norm_blocksize": 0}
                                 },
-                                "CellViT深度学习": {
+                                t('methods.cellvit'): {
                                     "model_type": "CellViT-256",
                                     "target_size": 768,
                                     "use_gpu": (GPU_AVAILABLE and GPU_COMPATIBLE)
                                 },
-                                "CellSAM深度学习": {
+                                t('methods.cellsam'): {
                                     "model_type": "vit_b",
                                     "points_per_side": 32,
                                     "use_gpu": (GPU_AVAILABLE and GPU_COMPATIBLE)
@@ -1609,20 +2120,20 @@ with tab2:
                                     st.image(result['mask'], use_container_width=True)
 
                                     # 显示统计
-                                    st.metric("前景比例", f"{result['foreground_ratio']:.2f}%")
-                                    st.metric("处理时间", f"{result['processing_time']*1000:.2f} ms")
+                                    st.metric(t('metrics.foreground_ratio'), f"{result['foreground_ratio']:.2f}%")
+                                    st.metric(t('metrics.processing_time'), f"{result['processing_time']*1000:.2f} ms")
 
                             # 性能对比表
-                            st.subheader("📈 性能对比")
+                            st.subheader(t('common.performance_comparison'))
 
                             comp_df_data = []
                             for method_name in comp_methods:
                                 result = comparison_results[method_name]
                                 comp_df_data.append({
-                                    '方法': method_name,
-                                    '前景像素': result['foreground_pixels'],
-                                    '前景比例(%)': f"{result['foreground_ratio']:.2f}",
-                                    '处理时间(ms)': f"{result['processing_time']*1000:.2f}"
+                                    t('common.method_column'): method_name,
+                                    t('metrics.foreground_pixels'): result['foreground_pixels'],
+                                    f"{t('metrics.foreground_ratio')}(%)": f"{result['foreground_ratio']:.2f}",
+                                    f"{t('metrics.processing_time')}(ms)": f"{result['processing_time']*1000:.2f}"
                                 })
 
                             comp_df = pd.DataFrame(comp_df_data)
@@ -1630,10 +2141,10 @@ with tab2:
 
                             # 推荐最快的方法
                             fastest_method = min(comp_methods, key=lambda m: comparison_results[m]['processing_time'])
-                            st.success(f"⚡ 最快方法: {fastest_method} ({comparison_results[fastest_method]['processing_time']*1000:.2f} ms)")
+                            st.success(t('common.fastest_method', method=fastest_method, time=comparison_results[fastest_method]['processing_time']*1000))
 
                             # 对比结果导出
-                            st.subheader("💾 导出对比结果")
+                            st.subheader(t('common.export_results'))
 
                             col_comp_export1, col_comp_export2, col_comp_export3 = st.columns(3)
 
@@ -1661,7 +2172,7 @@ with tab2:
 
                             with col_comp_export1:
                                 st.download_button(
-                                    "📦 导出所有掩码(ZIP)",
+                                    t('common.export_all_masks'),
                                     data=comp_zip_buffer.getvalue(),
                                     file_name=f"comparison_masks_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
                                     mime="application/zip",
@@ -1670,7 +2181,7 @@ with tab2:
 
                             with col_comp_export2:
                                 st.download_button(
-                                    "🖼️ 导出所有叠加图(ZIP)",
+                                    t('common.export_all_overlays'),
                                     data=comp_overlay_zip_buffer.getvalue(),
                                     file_name=f"comparison_overlays_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
                                     mime="application/zip",
@@ -1679,7 +2190,7 @@ with tab2:
 
                             with col_comp_export3:
                                 st.download_button(
-                                    "📊 导出对比报告(CSV)",
+                                    t('common.export_comparison_report'),
                                     data=comp_csv_buffer.getvalue(),
                                     file_name=f"comparison_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                                     mime="text/csv",
@@ -1687,21 +2198,21 @@ with tab2:
                                 )
 
                         except Exception as e:
-                            st.error(f"❌ 对比失败: {str(e)}")
+                            st.error(f"❌ {t('common.error')}: {str(e)}")
         else:
-            st.info("👈 请在左侧上传细胞图像")
+            st.info(t('common.please_upload_left'))
 
 # ==================== 标签页3: 模型融合 ====================
 with tab3:
-    st.header("🔀 多模型分割融合")
-    st.markdown("融合多个深度学习模型的分割结果，提供更准确的细胞分割")
+    st.header(t('tabs.model_fusion'))
+    st.markdown(t('fusion.description'))
 
     col_left, col_right = st.columns([1, 2])
 
     with col_left:
-        st.subheader("📤 图像上传")
+        st.subheader(t('common.image_upload'))
         fusion_uploaded = st.file_uploader(
-            "上传细胞图像",
+            t('common.upload_image'),
             type=['png', 'jpg', 'jpeg', 'tif', 'tiff'],
             key="fusion_upload"
         )
@@ -1710,21 +2221,21 @@ with tab3:
             fusion_image = Image.open(fusion_uploaded)
             fusion_image_np = np.array(fusion_image)
 
-            st.subheader("🤖 模型选择")
-            st.markdown("至少选择2个模型")
+            st.subheader(t('common.model_selection'))
+            st.markdown(t('fusion.select_models'))
 
             # 深度学习模型
-            st.markdown("**深度学习模型**")
-            use_cellpose = st.checkbox("Cellpose深度学习", value=True, key="fusion_cellpose")
-            use_cellvit = st.checkbox("CellViT深度学习", value=False, key="fusion_cellvit")
-            use_cellsam = st.checkbox("CellSAM深度学习", value=True, key="fusion_cellsam")
+            st.markdown(t('fusion.deep_learning_models'))
+            use_cellpose = st.checkbox(t('methods.cellpose'), value=True, key="fusion_cellpose")
+            use_cellvit = st.checkbox(t('methods.cellvit'), value=False, key="fusion_cellvit")
+            use_cellsam = st.checkbox(t('methods.cellsam'), value=True, key="fusion_cellsam")
 
             # 传统方法
-            st.markdown("**传统分割方法**")
-            use_watershed = st.checkbox("分水岭算法", value=False, key="fusion_watershed")
-            use_otsu = st.checkbox("Otsu阈值", value=False, key="fusion_otsu")
-            use_adaptive = st.checkbox("自适应阈值", value=False, key="fusion_adaptive")
-            use_canny = st.checkbox("Canny边缘检测", value=False, key="fusion_canny")
+            st.markdown(t('fusion.traditional_methods'))
+            use_watershed = st.checkbox(t('methods.watershed'), value=False, key="fusion_watershed")
+            use_otsu = st.checkbox(t('methods.otsu'), value=False, key="fusion_otsu")
+            use_adaptive = st.checkbox(t('methods.adaptive'), value=False, key="fusion_adaptive")
+            use_canny = st.checkbox(t('methods.canny'), value=False, key="fusion_canny")
 
             selected_models = []
             if use_cellpose: selected_models.append("cellpose")
@@ -1736,285 +2247,329 @@ with tab3:
             if use_canny: selected_models.append("canny")
 
             if len(selected_models) < 2:
-                st.warning("⚠️ 请至少选择2个模型进行融合")
+                st.warning(t('messages.select_at_least_two_models'))
             else:
                 # 模型参数配置
-                with st.expander("⚙️ 模型参数配置", expanded=False):
+                with st.expander(t('fusion.model_params_config'), expanded=False):
                     model_params = {}
 
                     if use_cellpose:
-                        st.markdown("**Cellpose参数**")
-                        model_params['cellpose_diameter'] = st.slider("细胞直径", 10, 100, 30, key="fusion_cp_dia")
-                        model_params['cellpose_gpu'] = st.checkbox("使用GPU", value=True, key="fusion_cp_gpu")
+                        st.markdown(t('fusion.cellpose_params'))
+                        model_params['cellpose_diameter'] = st.slider(t('segmentation.cell_diameter'), 10, 100, 30, key="fusion_cp_dia")
+                        model_params['cellpose_gpu'] = st.checkbox(t('segmentation.use_gpu', gpu_name=GPU_NAME if GPU_AVAILABLE else "N/A"), value=True, key="fusion_cp_gpu")
 
                     if use_cellvit:
-                        st.markdown("**CellViT参数**")
-                        model_params['cellvit_size'] = st.selectbox("模型大小", [256, 512], index=0, key="fusion_cv_size")
-                        model_params['cellvit_gpu'] = st.checkbox("使用GPU", value=True, key="fusion_cv_gpu")
+                        st.markdown(t('fusion.cellvit_params'))
+                        model_params['cellvit_size'] = st.selectbox(t('segmentation.model_type'), [256, 512], index=0, key="fusion_cv_size")
+                        model_params['cellvit_gpu'] = st.checkbox(t('segmentation.use_gpu', gpu_name=GPU_NAME if GPU_AVAILABLE else "N/A"), value=True, key="fusion_cv_gpu")
 
                     if use_cellsam:
-                        st.markdown("**CellSAM参数**")
-                        model_params['cellsam_points'] = st.slider("采样点数", 16, 64, 32, key="fusion_sam_points")
-                        model_params['cellsam_gpu'] = st.checkbox("使用GPU", value=True, key="fusion_sam_gpu")
+                        st.markdown(t('fusion.cellsam_params'))
+                        model_params['cellsam_points'] = st.slider(t('segmentation.points_per_side'), 16, 64, 32, key="fusion_sam_points")
+                        model_params['cellsam_gpu'] = st.checkbox(t('segmentation.use_gpu', gpu_name=GPU_NAME if GPU_AVAILABLE else "N/A"), value=True, key="fusion_sam_gpu")
 
                     if use_watershed:
-                        st.markdown("**分水岭算法参数**")
-                        model_params['watershed_min_distance'] = st.slider("最小距离", 5, 30, 10, key="fusion_ws_dist")
-                        model_params['watershed_threshold'] = st.slider("阈值", 0.3, 0.9, 0.5, 0.05, key="fusion_ws_thresh")
+                        st.markdown(t('fusion.watershed_params'))
+                        model_params['watershed_min_distance'] = st.slider(t('fusion.min_distance'), 5, 30, 10, key="fusion_ws_dist")
+                        model_params['watershed_threshold'] = st.slider(t('fusion.threshold'), 0.3, 0.9, 0.5, 0.05, key="fusion_ws_thresh")
 
                     if use_otsu:
-                        st.markdown("**Otsu阈值参数**")
-                        st.info("Otsu方法自动计算最优阈值，无需手动配置参数")
+                        st.markdown(t('fusion.otsu_params'))
+                        st.info(t('messages.otsu_auto_threshold'))
 
                     if use_adaptive:
-                        st.markdown("**自适应阈值参数**")
-                        model_params['adaptive_block_size'] = st.slider("块大小", 11, 51, 21, 2, key="fusion_adp_block")
-                        model_params['adaptive_c'] = st.slider("常数C", 0, 20, 5, key="fusion_adp_c")
+                        st.markdown(t('fusion.adaptive_params'))
+                        model_params['adaptive_block_size'] = st.slider(t('segmentation.block_size'), 11, 51, 21, 2, key="fusion_adp_block")
+                        model_params['adaptive_c'] = st.slider(t('segmentation.constant_c'), 0, 20, 5, key="fusion_adp_c")
 
                     if use_canny:
-                        st.markdown("**Canny边缘检测参数**")
-                        model_params['canny_threshold1'] = st.slider("低阈值", 20, 150, 50, key="fusion_canny_t1")
-                        model_params['canny_threshold2'] = st.slider("高阈值", 50, 300, 150, key="fusion_canny_t2")
+                        st.markdown(t('fusion.canny_params'))
+                        model_params['canny_threshold1'] = st.slider(t('segmentation.low_threshold'), 20, 150, 50, key="fusion_canny_t1")
+                        model_params['canny_threshold2'] = st.slider(t('segmentation.high_threshold'), 50, 300, 150, key="fusion_canny_t2")
 
                 # 融合策略选择
-                st.subheader("🎯 融合策略")
+                st.subheader(t('common.fusion_strategy'))
 
                 # 策略类型选择
                 strategy_type = st.radio(
-                    "选择策略类型",
-                    ["简单策略", "高级融合方法 (DST)"],
+                    t('fusion.strategy_type'),
+                    [t('fusion.simple_strategy'), t('fusion.advanced_dst')],
                     key="strategy_type"
                 )
 
-                if strategy_type == "简单策略":
+                if strategy_type == t('fusion.simple_strategy'):
                     fusion_strategy = st.radio(
-                        "选择融合策略",
+                        t('fusion.select_fusion_strategy'),
                         ["majority", "weighted", "union", "intersection"],
                         format_func=lambda x: {
-                            "majority": "简单投票 (推荐)",
-                            "weighted": "加权投票",
-                            "union": "激进融合 (高召回)",
-                            "intersection": "保守融合 (高精确)"
+                            "majority": t('fusion.simple_voting'),
+                            "weighted": t('fusion.weighted_voting'),
+                            "union": t('fusion.aggressive_fusion'),
+                            "intersection": t('fusion.conservative_fusion')
                         }[x],
                         key="fusion_strategy"
                     )
                 else:
                     fusion_strategy = "dempster_shafer"
-                    st.info("🎓 **Dempster-Shafer理论融合**：基于证据理论的高级融合方法，能够明确建模不确定性和量化模型冲突。")
+                    st.info(t('messages.dst_fusion_info'))
 
                 # 高级选项
-                with st.expander("🔧 高级选项", expanded=False):
-                    iou_threshold = st.slider("IoU匹配阈值", 0.2, 0.9, 0.2, 0.05, key="fusion_iou")
+                with st.expander(t('fusion.advanced_options'), expanded=False):
+                    iou_threshold = st.slider(t('fusion.iou_threshold'), 0.2, 0.9, 0.2, 0.05, key="fusion_iou")
 
                     # 最小投票数设置（只在3个或更多模型时显示slider）
                     if len(selected_models) == 2:
-                        st.info("💡 最小投票数: 2 (固定，因为只选择了2个模型)")
+                        st.info(t('messages.min_vote_count_fixed'))
                         min_vote_count = 2
                     else:
-                        min_vote_count = st.slider("最小投票数", 2, len(selected_models), 2, key="fusion_min_vote")
+                        min_vote_count = st.slider(t('fusion.min_vote_count'), 2, len(selected_models), 2, key="fusion_min_vote")
 
                     if fusion_strategy == "weighted":
-                        st.markdown("**模型权重设置**")
+                        st.markdown(t('fusion.model_weights'))
                         weights = {}
                         if use_cellpose:
-                            weights['cellpose'] = st.slider("Cellpose权重", 0.1, 2.0, 1.0, 0.1, key="w_cp")
+                            weights['cellpose'] = st.slider(t('fusion.cellpose_weight'), 0.1, 2.0, 1.0, 0.1, key="w_cp")
                         if use_cellvit:
-                            weights['cellvit'] = st.slider("CellViT权重", 0.1, 2.0, 1.0, 0.1, key="w_cv")
+                            weights['cellvit'] = st.slider(t('fusion.cellvit_weight'), 0.1, 2.0, 1.0, 0.1, key="w_cv")
                         if use_cellsam:
-                            weights['cellsam'] = st.slider("CellSAM权重", 0.1, 2.0, 1.0, 0.1, key="w_sam")
+                            weights['cellsam'] = st.slider(t('fusion.cellsam_weight'), 0.1, 2.0, 1.0, 0.1, key="w_sam")
                     else:
                         weights = None
 
                     # DST特定参数
                     if fusion_strategy == "dempster_shafer":
-                        st.markdown("**🎓 DST模型可靠性参数**")
-                        st.caption("可靠性表示模型的整体置信度，范围[0,1]，越高表示越信任该模型")
+                        st.markdown(t('fusion.dst_reliability_params'))
+                        st.caption(t('fusion.reliability_description'))
 
                         model_reliabilities = {}
                         if use_cellpose:
-                            model_reliabilities['cellpose'] = st.slider("Cellpose可靠性", 0.5, 1.0, 0.9, 0.05, key="dst_r_cp")
+                            model_reliabilities['cellpose'] = st.slider(t('fusion.cellpose_reliability'), 0.5, 1.0, 0.9, 0.05, key="dst_r_cp")
                         if use_cellvit:
-                            model_reliabilities['cellvit'] = st.slider("CellViT可靠性", 0.5, 1.0, 0.85, 0.05, key="dst_r_cv")
+                            model_reliabilities['cellvit'] = st.slider(t('fusion.cellvit_reliability'), 0.5, 1.0, 0.85, 0.05, key="dst_r_cv")
                         if use_cellsam:
-                            model_reliabilities['cellsam'] = st.slider("CellSAM可靠性", 0.5, 1.0, 0.8, 0.05, key="dst_r_sam")
+                            model_reliabilities['cellsam'] = st.slider(t('fusion.cellsam_reliability'), 0.5, 1.0, 0.8, 0.05, key="dst_r_sam")
 
                         # 传统方法的可靠性
                         if 'watershed' in selected_models:
-                            model_reliabilities['watershed'] = st.slider("Watershed可靠性", 0.5, 1.0, 0.7, 0.05, key="dst_r_ws")
+                            model_reliabilities['watershed'] = st.slider(t('fusion.watershed_reliability'), 0.5, 1.0, 0.7, 0.05, key="dst_r_ws")
                         if 'otsu' in selected_models:
-                            model_reliabilities['otsu'] = st.slider("Otsu可靠性", 0.5, 1.0, 0.65, 0.05, key="dst_r_otsu")
+                            model_reliabilities['otsu'] = st.slider(t('fusion.otsu_reliability'), 0.5, 1.0, 0.65, 0.05, key="dst_r_otsu")
                         if 'adaptive' in selected_models:
-                            model_reliabilities['adaptive'] = st.slider("Adaptive可靠性", 0.5, 1.0, 0.65, 0.05, key="dst_r_adp")
+                            model_reliabilities['adaptive'] = st.slider(t('fusion.adaptive_reliability'), 0.5, 1.0, 0.65, 0.05, key="dst_r_adp")
                         if 'canny' in selected_models:
-                            model_reliabilities['canny'] = st.slider("Canny可靠性", 0.5, 1.0, 0.6, 0.05, key="dst_r_canny")
+                            model_reliabilities['canny'] = st.slider(t('fusion.canny_reliability'), 0.5, 1.0, 0.6, 0.05, key="dst_r_canny")
 
-                        conflict_threshold = st.slider("冲突阈值", 0.3, 0.9, 0.4, 0.05, key="dst_conflict_th",
-                                                      help="超过此阈值的实例将被标记为高冲突")
+                        conflict_threshold = st.slider(t('fusion.conflict_threshold'), 0.3, 0.9, 0.4, 0.05, key="dst_conflict_th",
+                                                      help=t('fusion.conflict_threshold_help'))
                     else:
                         model_reliabilities = None
                         conflict_threshold = 0.4
 
+                # 后处理选项
+                with st.expander(t('segmentation.postprocessing_options'), expanded=False):
+                    st.markdown(t('segmentation.cell_extraction_analysis'))
+
+                    fusion_extract_cells = st.checkbox(
+                        t('segmentation.extract_individual_cells'),
+                        value=False,
+                        key="fusion_extract_cells",
+                        help=t('segmentation.extract_cells_help')
+                    )
+
+                    fusion_min_cell_area = st.slider(
+                        t('segmentation.min_cell_area'),
+                        50, 500, 100,
+                        key="fusion_min_cell_area",
+                        help=t('segmentation.min_cell_area_help')
+                    )
+
+                    fusion_extract_morphology = st.checkbox(
+                        t('segmentation.extract_morphology_features'),
+                        value=False,
+                        key="fusion_extract_morphology",
+                        help=t('segmentation.extract_features_help')
+                    )
+
+                    fusion_use_advanced_features = st.checkbox(
+                        t('segmentation.advanced_features'),
+                        value=False,
+                        key="fusion_use_advanced_features",
+                        help=t('segmentation.advanced_features_help')
+                    )
+
                 # 开始融合按钮
-                if st.button("🚀 开始融合", type="primary", key="start_fusion"):
+                if st.button(t('common.start_fusion'), type="primary", key="start_fusion"):
+                    # 构建后处理选项
+                    fusion_postprocess_options = {
+                        'closing': True,
+                        'closing_kernel_size': 5,
+                        'extract_cells': fusion_extract_cells,
+                        'min_cell_area': fusion_min_cell_area,
+                        'extract_morphology': fusion_extract_morphology,
+                        'use_advanced_features': fusion_use_advanced_features
+                    }
+
                     run_fusion_pipeline(
                         fusion_image_np, selected_models, fusion_strategy,
                         iou_threshold, min_vote_count, weights, model_params, col_right,
-                        model_reliabilities=model_reliabilities, conflict_threshold=conflict_threshold
+                        model_reliabilities=model_reliabilities, conflict_threshold=conflict_threshold,
+                        postprocess_options=fusion_postprocess_options
                     )
 
     with col_right:
         if fusion_uploaded:
-            st.subheader("📷 原始图像")
+            st.subheader(t('common.original_image'))
             st.image(fusion_image, width=400)
-            st.caption(f"尺寸: {fusion_image_np.shape}")
+            st.caption(t('common.image_size', shape=fusion_image_np.shape))
 
-            st.subheader("📊 融合结果")
-            st.info("配置参数后点击'开始融合'按钮")
+            # 融合结果将由run_fusion_pipeline函数在此列中显示
+            # 不需要重复显示逻辑，避免"融合结果"标题重复出现
         else:
-            st.info("👈 请在左侧上传细胞图像")
+            st.info(t('messages.upload_image_left'))
 
 # ==================== 标签页4: 批量处理 ====================
 with tab4:
-    st.header("📦 批量处理")
+    st.header(t('tabs.batch_processing'))
 
     col_batch_left, col_batch_right = st.columns([1, 2])
 
     with col_batch_left:
-        st.subheader("⚙️ 批量设置")
+        st.subheader(t('common.batch_settings'))
 
         # 批量上传
         uploaded_files = st.file_uploader(
-            "上传多张细胞图像",
+            t('common.upload_multiple_images'),
             type=["png", "jpg", "jpeg", "tif", "tiff"],
             accept_multiple_files=True,
             key="batch_upload"
         )
 
         # 预处理选项
-        with st.expander("🔧 预处理选项"):
-            batch_denoise = st.checkbox("去噪处理", value=False, key="batch_denoise")
-            batch_enhance = st.checkbox("对比度增强", value=False, key="batch_enhance")
-            batch_normalize = st.checkbox("归一化", value=False, key="batch_normalize")
+        with st.expander(t('segmentation.preprocessing')):
+            batch_denoise = st.checkbox(t('segmentation.denoise'), value=False, key="batch_denoise")
+            batch_enhance = st.checkbox(t('segmentation.enhance'), value=False, key="batch_enhance")
+            batch_normalize = st.checkbox(t('segmentation.normalize'), value=False, key="batch_normalize")
 
         # 后处理选项
-        with st.expander("🔬 后处理选项"):
-            batch_closing = st.checkbox("区域闭合", value=True, key="batch_closing", help="使用形态学闭运算填充细胞边界间隙")
+        with st.expander(t('segmentation.postprocessing')):
+            batch_closing = st.checkbox(t('segmentation.region_closing'), value=True, key="batch_closing", help=t('segmentation.region_closing_help'))
             if batch_closing:
-                batch_closing_kernel_size = st.slider("闭运算核大小", 3, 15, 5, 2, key="batch_closing_kernel", help="核越大，填充的间隙越大")
+                batch_closing_kernel_size = st.slider(t('segmentation.closing_kernel_size'), 3, 15, 5, 2, key="batch_closing_kernel", help=t('segmentation.closing_kernel_help'))
             else:
                 batch_closing_kernel_size = 5
 
-            batch_extract_cells = st.checkbox("提取单个细胞", value=False, key="batch_extract_cells", help="提取并保存单个细胞样本")
+            batch_extract_cells = st.checkbox(t('segmentation.extract_cells'), value=False, key="batch_extract_cells", help=t('segmentation.extract_cells_help'))
             if batch_extract_cells:
-                batch_min_cell_area = st.slider("最小细胞面积", 50, 500, 100, 10, key="batch_min_cell_area", help="过滤掉面积小于此值的区域")
+                batch_min_cell_area = st.slider(t('segmentation.min_cell_area'), 50, 500, 100, 10, key="batch_min_cell_area", help=t('segmentation.min_cell_area_help'))
 
-            batch_extract_morphology = st.checkbox("提取形态学特征", value=False, key="batch_extract_morphology", help="提取单个细胞的几何形态学特征（面积、周长、圆度等）")
+            batch_extract_morphology = st.checkbox(t('segmentation.extract_features'), value=False, key="batch_extract_morphology", help=t('segmentation.extract_features_help'))
 
             # 批量高级特征提取选项
-            batch_use_advanced_features = st.checkbox("使用高级特征提取", value=False, key="batch_use_advanced_features", help="提取更高级的形态学、纹理和强度特征")
+            batch_use_advanced_features = st.checkbox(t('segmentation.advanced_features'), value=False, key="batch_use_advanced_features", help=t('segmentation.advanced_features_help'))
             if batch_use_advanced_features:
-                st.caption("**高级特征类别**")
-                batch_include_hu_moments = st.checkbox("Hu矩特征", value=True, key="batch_hu_moments", help="7个旋转、缩放、平移不变的形状描述符")
-                batch_include_intensity = st.checkbox("强度统计特征", value=True, key="batch_intensity", help="灰度统计（均值、标准差、偏度、峰度、熵）")
-                batch_include_texture = st.checkbox("纹理特征(GLCM)", value=True, key="batch_texture", help="基于灰度共生矩阵的Haralick纹理特征")
-                batch_include_boundary = st.checkbox("边界复杂度特征", value=True, key="batch_boundary", help="边界粗糙度、凹凸性分析")
-                batch_include_advanced_shape = st.checkbox("高级形状特征", value=True, key="batch_advanced_shape", help="椭圆度、伸长度、分形维数等")
+                st.caption(t('segmentation.advanced_feature_categories'))
+                batch_include_hu_moments = st.checkbox(t('segmentation.hu_moments'), value=True, key="batch_hu_moments", help=t('segmentation.hu_moments_help'))
+                batch_include_intensity = st.checkbox(t('segmentation.intensity_stats'), value=True, key="batch_intensity", help=t('segmentation.intensity_stats_help'))
+                batch_include_texture = st.checkbox(t('segmentation.texture_features'), value=True, key="batch_texture", help=t('segmentation.texture_features_help'))
+                batch_include_boundary = st.checkbox(t('segmentation.boundary_complexity'), value=True, key="batch_boundary", help=t('segmentation.boundary_complexity_help'))
+                batch_include_advanced_shape = st.checkbox(t('segmentation.advanced_shape_features'), value=True, key="batch_advanced_shape", help=t('segmentation.advanced_shape_features_help'))
 
         # 分割方法
         batch_method = st.selectbox(
-            "分割方法",
-            ["Otsu阈值", "自适应阈值", "分水岭算法", "Canny边缘检测", "Cellpose深度学习", "CellViT深度学习", "CellSAM深度学习"],
+            t('segmentation.method'),
+            [t('methods.otsu'), t('methods.adaptive'), t('methods.watershed'), t('methods.canny'),
+             t('methods.cellpose'), t('methods.cellvit'), t('methods.cellsam')],
             key="batch_method"
         )
 
         # 方法参数
-        with st.expander("📐 方法参数"):
-            if batch_method == "自适应阈值":
-                batch_block_size = st.slider("块大小", 3, 51, 11, 2, key="batch_block_size")
-                batch_C = st.slider("常数C", 0, 20, 2, key="batch_C")
+        with st.expander(t('segmentation.method_params')):
+            if batch_method == t('methods.adaptive'):
+                batch_block_size = st.slider(t('segmentation.block_size'), 3, 51, 11, 2, key="batch_block_size")
+                batch_C = st.slider(t('segmentation.constant_c'), 0, 20, 2, key="batch_C")
                 batch_params = {"block_size": batch_block_size, "C": batch_C}
-            elif batch_method == "Canny边缘检测":
-                batch_low = st.slider("低阈值", 0, 200, 50, 10, key="batch_low")
-                batch_high = st.slider("高阈值", 0, 300, 150, 10, key="batch_high")
+            elif batch_method == t('methods.canny'):
+                batch_low = st.slider(t('segmentation.low_threshold'), 0, 200, 50, 10, key="batch_low")
+                batch_high = st.slider(t('segmentation.high_threshold'), 0, 300, 150, 10, key="batch_high")
                 batch_params = {"low_threshold": batch_low, "high_threshold": batch_high}
-            elif batch_method == "Cellpose深度学习":
-                batch_model_type = st.selectbox("模型类型", ["cyto2", "cyto", "nuclei"], key="batch_model_type",
-                                               help="cyto2: 细胞质模型(推荐), cyto: 旧版细胞质模型, nuclei: 细胞核模型")
-                batch_diameter = st.slider("细胞直径(像素)", 0, 100, 30, 5, key="batch_diameter",
-                                          help="设置为0则自动检测")
+            elif batch_method == t('methods.cellpose'):
+                batch_model_type = st.selectbox(t('segmentation.model_type'), ["cyto2", "cyto", "nuclei"], key="batch_model_type",
+                                               help=t('segmentation.model_type_help'))
+                batch_diameter = st.slider(t('segmentation.cell_diameter'), 0, 100, 30, 5, key="batch_diameter",
+                                          help=t('segmentation.cell_diameter_help'))
                 if batch_diameter == 0:
                     batch_diameter = None
 
                 # GPU选项
                 if GPU_AVAILABLE and GPU_COMPATIBLE:
-                    batch_use_gpu = st.checkbox(f"🚀 使用GPU加速 ({GPU_NAME})", value=True, key="batch_use_gpu",
-                                               help="启用GPU可大幅提升处理速度（10-50倍）")
+                    batch_use_gpu = st.checkbox(t('segmentation.use_gpu', gpu_name=GPU_NAME), value=True, key="batch_use_gpu",
+                                               help=t('segmentation.use_gpu_help'))
                 elif GPU_AVAILABLE and not GPU_COMPATIBLE:
                     batch_use_gpu = False
-                    st.error(f"⚠️ GPU不兼容: {GPU_WARNING}")
-                    st.info("💡 将使用CPU模式处理（速度较慢但稳定）")
+                    st.error(t('segmentation.gpu_incompatible', warning=GPU_WARNING))
+                    st.info(t('messages.gpu_cpu_mode'))
                 else:
                     batch_use_gpu = False
-                    st.info("ℹ️ GPU不可用，将使用CPU处理")
+                    st.info(t('messages.gpu_unavailable'))
 
                 batch_params = {"model_type": batch_model_type, "diameter": batch_diameter, "use_gpu": batch_use_gpu}
-            elif batch_method == "CellViT深度学习":
+            elif batch_method == t('methods.cellvit'):
                 # 环境检查
                 if not CELLVIT_ENV_OK:
-                    st.error(f"⚠️ CellViT专用环境未找到！")
-                    st.warning("请先创建CellViT环境")
+                    st.error(t('messages.cellvit_env_not_found'))
+                    st.warning(t('messages.cellvit_env_required'))
                 else:
-                    st.success(f"✅ CellViT专用环境已就绪")
+                    st.success(t('messages.cellvit_env_ready', env=CELLVIT_ENV_NAME))
 
-                batch_model_type = st.selectbox("模型类型", ["CellViT-256"], key="batch_cellvit_model",
-                                               help="CellViT-256: 基于Vision Transformer的细胞核分割模型")
-                batch_target_size = st.slider("目标图像大小", 256, 1024, 512, 64, key="batch_target_size",
-                                             help="图像会被调整到此大小进行处理。较大的值可检测更多小细胞，但处理更慢。推荐512-768")
+                batch_model_type = st.selectbox(t('segmentation.model_type'), ["CellViT-256"], key="batch_cellvit_model",
+                                               help=t('segmentation.model_type_help'))
+                batch_target_size = st.slider(t('segmentation.target_size'), 256, 1024, 512, 64, key="batch_target_size",
+                                             help=t('segmentation.target_size_help'))
 
                 # GPU选项
                 if GPU_AVAILABLE and GPU_COMPATIBLE:
-                    batch_use_gpu = st.checkbox(f"🚀 使用GPU加速 ({GPU_NAME})", value=True, key="batch_cellvit_gpu",
-                                               help="CellViT推荐使用GPU")
+                    batch_use_gpu = st.checkbox(t('segmentation.use_gpu', gpu_name=GPU_NAME), value=True, key="batch_cellvit_gpu",
+                                               help=t('segmentation.cellvit_gpu_help'))
                 elif GPU_AVAILABLE and not GPU_COMPATIBLE:
                     batch_use_gpu = False
-                    st.error(f"⚠️ GPU不兼容: {GPU_WARNING}")
+                    st.error(t('segmentation.gpu_incompatible', warning=GPU_WARNING))
                 else:
                     batch_use_gpu = False
-                    st.info("ℹ️ GPU不可用，将使用CPU处理")
+                    st.info(t('messages.gpu_unavailable'))
 
                 batch_params = {"model_type": batch_model_type, "target_size": batch_target_size, "use_gpu": batch_use_gpu}
-            elif batch_method == "CellSAM深度学习":
+            elif batch_method == t('methods.cellsam'):
                 # 提示信息
-                st.info("ℹ️ CellSAM直接在当前环境中运行。首次使用需要下载模型文件到 models/sam/ 目录")
+                st.info(t('messages.cellsam_info'))
 
-                batch_model_type = st.selectbox("模型类型", ["vit_b", "vit_l", "vit_h"], key="batch_cellsam_model",
-                                               help="vit_b: 基础模型(91M参数), vit_l: 大模型(308M), vit_h: 超大模型(636M)")
-                batch_points_per_side = st.slider("提示点密度", 16, 64, 32, 8, key="batch_points_per_side",
-                                                 help="每边生成的提示点数量。较大的值可检测更多细胞，但处理更慢。推荐32")
+                batch_model_type = st.selectbox(t('segmentation.model_type'), ["vit_b", "vit_l", "vit_h"], key="batch_cellsam_model",
+                                               help=t('segmentation.model_size'))
+                batch_points_per_side = st.slider(t('segmentation.points_per_side'), 16, 64, 32, 8, key="batch_points_per_side",
+                                                 help=t('segmentation.points_per_side_help'))
 
                 # GPU选项
                 if GPU_AVAILABLE and GPU_COMPATIBLE:
-                    batch_use_gpu = st.checkbox(f"🚀 使用GPU加速 ({GPU_NAME})", value=True, key="batch_cellsam_gpu",
-                                               help="CellSAM推荐使用GPU")
+                    batch_use_gpu = st.checkbox(t('segmentation.use_gpu', gpu_name=GPU_NAME), value=True, key="batch_cellsam_gpu",
+                                               help=t('segmentation.cellsam_gpu_help'))
                 elif GPU_AVAILABLE and not GPU_COMPATIBLE:
                     batch_use_gpu = False
-                    st.error(f"⚠️ GPU不兼容: {GPU_WARNING}")
+                    st.error(t('segmentation.gpu_incompatible', warning=GPU_WARNING))
                 else:
                     batch_use_gpu = False
-                    st.info("ℹ️ GPU不可用，将使用CPU处理")
+                    st.info(t('messages.gpu_unavailable'))
 
                 batch_params = {"model_type": batch_model_type, "points_per_side": batch_points_per_side, "use_gpu": batch_use_gpu}
             else:
                 batch_params = {}
 
-        batch_process_btn = st.button("🚀 批量处理", type="primary", use_container_width=True)
+        batch_process_btn = st.button(t('common.batch_process'), type="primary", use_container_width=True)
 
     with col_batch_right:
         if uploaded_files:
-            st.info(f"📁 已上传 {len(uploaded_files)} 张图像")
+            st.info(t('messages.uploaded_files_count', count=len(uploaded_files)))
 
             if batch_process_btn:
-                st.subheader("📊 处理进度")
+                st.subheader(t('common.processing_progress'))
 
                 # 创建进度条
                 progress_bar = st.progress(0)
@@ -2056,7 +2611,7 @@ with tab4:
                             batch_postprocess_options
                         ))
                     except Exception as e:
-                        st.warning(f"⚠️ {uploaded_file.name} 读取失败: {str(e)}")
+                        st.warning(t('messages.file_read_failed', filename=uploaded_file.name, error=str(e)))
 
                 # 使用多进程并行处理
                 cpu_count = multiprocessing.cpu_count()
@@ -2088,36 +2643,36 @@ with tab4:
                                     'image': result_dict['image']
                                 })
                             else:
-                                st.warning(f"⚠️ {result_dict['filename']} 处理失败: {result_dict['error']}")
+                                st.warning(t('messages.image_processing_failed', filename=result_dict['filename'], error=result_dict['error']))
 
                         except Exception as e:
-                            st.warning(f"⚠️ {filename} 处理异常: {str(e)}")
+                            st.warning(t('messages.image_processing_exception', filename=filename, error=str(e)))
 
                         # 更新进度
                         progress_bar.progress(completed_count / len(task_args))
-                        status_text.text(f"⚙️ 已完成 {completed_count}/{len(task_args)} 张图像...")
+                        status_text.text(t('messages.batch_progress', completed=completed_count, total=len(task_args)))
 
-                status_text.text("✅ 批量处理完成！")
+                status_text.text(t('messages.batch_completed'))
                 st.session_state.batch_results = batch_results
 
                 # 显示统计摘要
-                st.subheader("📈 统计摘要")
+                st.subheader(t('common.statistics_summary'))
 
                 if batch_results:
                     df_data = []
                     for item in batch_results:
                         df_data.append({
-                            '文件名': item['filename'],
-                            '前景像素': item['result']['foreground_pixels'],
-                            '前景比例(%)': f"{item['result']['foreground_ratio']:.2f}",
-                            '处理时间(ms)': f"{item['result']['processing_time']*1000:.2f}"
+                            t('common.filename'): item['filename'],
+                            t('metrics.foreground_pixels'): item['result']['foreground_pixels'],
+                            t('metrics.foreground_ratio_percent'): f"{item['result']['foreground_ratio']:.2f}",
+                            t('metrics.processing_time_ms'): f"{item['result']['processing_time']*1000:.2f}"
                         })
 
                     df = pd.DataFrame(df_data)
                     st.dataframe(df, use_container_width=True)
 
                     # 可视化结果
-                    st.subheader("🖼️ 可视化结果")
+                    st.subheader(t('common.visualization_results'))
 
                     # 使用expander来展示每张图片的结果
                     for idx, item in enumerate(batch_results):
@@ -2125,28 +2680,28 @@ with tab4:
                             col_vis1, col_vis2, col_vis3 = st.columns(3)
 
                             with col_vis1:
-                                st.write("**原图**")
+                                st.write(t('common.original_image_bold'))
                                 st.image(item['image'], use_container_width=True)
 
                             with col_vis2:
-                                st.write("**分割掩码**")
+                                st.write(t('common.segmentation_mask_bold'))
                                 st.image(item['result']['mask'], use_container_width=True)
 
                             with col_vis3:
-                                st.write("**叠加显示**")
+                                st.write(t('common.overlay_display_bold'))
                                 st.image(item['result']['overlay'], use_container_width=True)
 
                             # 显示统计信息
                             col_stat1, col_stat2, col_stat3 = st.columns(3)
                             with col_stat1:
-                                st.metric("前景像素", f"{item['result']['foreground_pixels']:,}")
+                                st.metric(t('metrics.foreground_pixels'), f"{item['result']['foreground_pixels']:,}")
                             with col_stat2:
-                                st.metric("前景比例", f"{item['result']['foreground_ratio']:.2f}%")
+                                st.metric(t('metrics.foreground_ratio'), f"{item['result']['foreground_ratio']:.2f}%")
                             with col_stat3:
-                                st.metric("处理时间", f"{item['result']['processing_time']*1000:.2f} ms")
+                                st.metric(t('metrics.processing_time'), f"{item['result']['processing_time']*1000:.2f} ms")
 
                     # 批量导出
-                    st.subheader("💾 批量导出")
+                    st.subheader(t('common.batch_export'))
 
                     col_export_all1, col_export_all2, col_export_all3 = st.columns(3)
 
@@ -2172,7 +2727,7 @@ with tab4:
 
                     with col_export_all1:
                         st.download_button(
-                            "📦 导出所有掩码(ZIP)",
+                            t('common.export_all_masks_zip'),
                             data=zip_buffer.getvalue(),
                             file_name=f"masks_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
                             mime="application/zip",
@@ -2181,7 +2736,7 @@ with tab4:
 
                     with col_export_all2:
                         st.download_button(
-                            "🖼️ 导出所有叠加图(ZIP)",
+                            t('common.export_all_overlays_zip'),
                             data=overlay_zip_buffer.getvalue(),
                             file_name=f"overlays_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
                             mime="application/zip",
@@ -2190,7 +2745,7 @@ with tab4:
 
                     with col_export_all3:
                         st.download_button(
-                            "📊 导出统计报告(CSV)",
+                            t('common.export_statistics_report_csv'),
                             data=csv_buffer.getvalue(),
                             file_name=f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                             mime="text/csv",
@@ -2201,7 +2756,7 @@ with tab4:
                     total_cells = sum(len(item['result']['individual_cells']) if item['result']['individual_cells'] else 0 for item in batch_results)
                     if total_cells > 0:
                         st.write("")  # 添加间距
-                        st.info(f"🧬 共提取 {total_cells} 个细胞样本")
+                        st.info(t('messages.total_cells_extracted', count=total_cells))
 
                         # 准备所有细胞的ZIP文件
                         all_cells_zip_buffer = io.BytesIO()
@@ -2219,7 +2774,7 @@ with tab4:
                                         zip_file.writestr(f"{img_name}_cell_{idx+1:03d}_mask.png", cell_mask_bytes)
 
                         st.download_button(
-                            "🧬 导出所有细胞样本(ZIP)",
+                            t('common.export_all_cell_samples_zip'),
                             data=all_cells_zip_buffer.getvalue(),
                             file_name=f"all_cells_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
                             mime="application/zip",
@@ -2227,13 +2782,13 @@ with tab4:
                         )
 
         else:
-            st.info("👈 请在左侧上传多张细胞图像")
+            st.info(t('messages.upload_multiple_images_left'))
 
 # ==================== 标签页6: 异常检测 ====================
 with tab6:
-    st.header("🔍 异常检测")
-    st.caption("上传细胞特征CSV文件进行异常检测，识别形态学参数异常的细胞样本")
-    st.info("💡 使用说明请查看页面顶部的 📖 使用说明")
+    st.header(t('tabs.anomaly_detection'))
+    st.caption(t('help.anomaly_detection_caption'))
+    st.info(t('messages.usage_instructions_see_top'))
 
     st.markdown("---")
 
@@ -2242,16 +2797,16 @@ with tab6:
 
     with col_upload:
         uploaded_csv = st.file_uploader(
-            "📁 上传细胞特征CSV文件",
+            t('common.upload_csv_file'),
             type=["csv"],
             key="ml_csv_upload",
-            help="上传从图像分割模块导出的细胞特征CSV文件"
+            help=t('help.upload_csv_help')
         )
 
     with col_info:
         if uploaded_csv is not None:
-            st.success("✅ 文件已上传")
-            st.info(f"文件名: {uploaded_csv.name}")
+            st.success(t('messages.file_uploaded'))
+            st.info(t('messages.filename_info', name=uploaded_csv.name))
 
     # 处理上传的CSV文件
     if uploaded_csv is not None:
@@ -2264,23 +2819,23 @@ with tab6:
             missing_cols = [col for col in required_cols if col not in ml_features_df.columns]
 
             if missing_cols:
-                st.error(f"❌ CSV文件格式不正确！缺少必需的列: {', '.join(missing_cols)}")
-                st.info("请确保CSV文件是从图像分割模块导出的细胞特征文件")
+                st.error(t('messages.csv_format_incorrect', cols=', '.join(missing_cols)))
+                st.info(t('messages.csv_should_contain_features'))
             else:
                 # 显示数据概览
-                st.success(f"✅ CSV文件加载成功！共 {len(ml_features_df)} 个细胞")
+                st.success(t('messages.csv_loaded_successfully', count=len(ml_features_df)))
 
                 # 数据预览
-                with st.expander("📊 数据预览", expanded=False):
-                    st.write(f"**数据维度**: {ml_features_df.shape[0]} 行 × {ml_features_df.shape[1]} 列")
-                    st.write("**前10行数据**:")
+                with st.expander(t('common.data_preview'), expanded=False):
+                    st.write(t('common.data_dimensions', rows=ml_features_df.shape[0], cols=ml_features_df.shape[1]))
+                    st.write(t('common.first_10_rows'))
                     st.dataframe(ml_features_df.head(10), use_container_width=True)
 
                     # 显示特征列表
                     feature_cols = [col for col in ml_features_df.columns if col not in
                                    ['sequential_id', 'cell_id', 'centroid_x', 'centroid_y',
                                     'bbox_min_row', 'bbox_min_col', 'bbox_max_row', 'bbox_max_col']]
-                    st.write(f"**可用特征** ({len(feature_cols)} 个):")
+                    st.write(t('common.available_features', count=len(feature_cols)))
                     st.write(", ".join(feature_cols))
 
                 st.markdown("---")
@@ -2289,8 +2844,8 @@ with tab6:
                 st.session_state['ml_features_df'] = ml_features_df
 
         except Exception as e:
-            st.error(f"❌ 读取CSV文件失败: {str(e)}")
-            st.info("请确保上传的是有效的CSV文件")
+            st.error(t('messages.csv_read_failed', error=str(e)))
+            st.info(t('messages.ensure_valid_csv'))
 
     # 机器学习异常识别UI（只在有数据时显示）
     if 'ml_features_df' in st.session_state and not st.session_state['ml_features_df'].empty:
@@ -2298,73 +2853,73 @@ with tab6:
 
         st.markdown("---")
 
-        st.subheader("🔍 异常检测")
-        st.caption("使用无监督学习算法识别形态学参数异常的细胞样本")
+        st.subheader(t('ml.anomaly_detection_title'))
+        st.caption(t('ml.anomaly_detection_caption'))
 
         # 异常检测算法选择
         col_anomaly_algo, col_anomaly_param = st.columns([1, 2])
 
         with col_anomaly_algo:
             ml_anomaly_method = st.selectbox(
-                "异常检测算法",
+                t('ml.anomaly_detection_algorithm'),
                 ["Isolation Forest", "LOF", "One-Class SVM", "Elliptic Envelope"],
                 key="ml_anomaly_method",
-                help="选择异常检测算法。Isolation Forest适合高维数据，LOF基于密度，One-Class SVM学习正常边界，Elliptic Envelope假设高斯分布"
+                help=t('ml.anomaly_algorithm_help')
             )
 
         with col_anomaly_param:
             # 根据选择的算法显示不同的参数控件
             if ml_anomaly_method == "Isolation Forest":
                 ml_contamination = st.slider(
-                    "异常比例(contamination)",
+                    t('ml.contamination_ratio'),
                     0.01, 0.5, 0.1, 0.01,
                     key="ml_contamination_if",
-                    help="预期异常样本的比例"
+                    help=t('ml.contamination_help')
                 )
 
             elif ml_anomaly_method == "LOF":
                 col_cont, col_neigh = st.columns(2)
                 with col_cont:
                     ml_contamination = st.slider(
-                        "异常比例",
+                        t('ml.contamination_ratio'),
                         0.01, 0.5, 0.1, 0.01,
                         key="ml_contamination_lof"
                     )
                 with col_neigh:
                     ml_n_neighbors_lof = st.slider(
-                        "邻居数量",
+                        t('ml.n_neighbors'),
                         5, 50, 20, 5,
                         key="ml_n_neighbors_lof",
-                        help="用于计算局部密度的邻居数量"
+                        help=t('ml.n_neighbors_help')
                     )
 
             elif ml_anomaly_method == "One-Class SVM":
                 col_nu, col_kernel = st.columns(2)
                 with col_nu:
                     ml_nu = st.slider(
-                        "异常上界(nu)",
+                        t('ml.nu_upper_bound'),
                         0.01, 0.5, 0.1, 0.01,
                         key="ml_nu",
-                        help="异常样本比例的上界"
+                        help=t('ml.nu_upper_bound_help')
                     )
                 with col_kernel:
                     ml_kernel = st.selectbox(
-                        "核函数",
+                        t('ml.kernel_function'),
                         ["rbf", "linear", "poly", "sigmoid"],
                         key="ml_kernel"
                     )
 
             elif ml_anomaly_method == "Elliptic Envelope":
                 ml_contamination = st.slider(
-                    "异常比例(contamination)",
+                    t('ml.contamination_ratio'),
                     0.01, 0.5, 0.1, 0.01,
                     key="ml_contamination_ee",
-                    help="预期异常样本的比例"
+                    help=t('ml.contamination_help')
                 )
 
         # 执行异常检测按钮
-        if st.button("🚀 执行异常检测", type="primary", use_container_width=True, key="ml_anomaly_button"):
-            with st.spinner("正在执行异常检测..."):
+        if st.button(t('ml.execute_anomaly_detection'), type="primary", use_container_width=True, key="ml_anomaly_button"):
+            with st.spinner(t('ml.executing_anomaly_detection')):
                 try:
                     # 执行异常检测
                     if ml_anomaly_method == "Isolation Forest":
@@ -2390,34 +2945,34 @@ with tab6:
                     ml_features_df_anomaly['anomaly_label'] = ml_features_df_anomaly['anomaly'].map({1: '正常', -1: '异常'})
                     st.session_state['ml_features_df_anomaly'] = ml_features_df_anomaly
 
-                    st.success(f"✅ 异常检测完成！")
+                    st.success(t('ml.anomaly_detection_completed'))
 
                     # 显示异常检测结果
-                    st.write("**异常检测结果**")
+                    st.write(t('ml.anomaly_detection_results'))
                     col_r1, col_r2, col_r3 = st.columns(3)
 
                     with col_r1:
-                        st.metric("正常样本", f"{info['n_normal']} 个",
-                                 help="被识别为正常的细胞数量")
+                        st.metric(t('ml.normal_samples'), f"{info['n_normal']} 个",
+                                 help=t('ml.normal_samples_help'))
                     with col_r2:
-                        st.metric("异常样本", f"{info['n_anomalies']} 个",
-                                 help="被识别为异常的细胞数量")
+                        st.metric(t('ml.anomaly_samples'), f"{info['n_anomalies']} 个",
+                                 help=t('ml.anomaly_samples_help'))
                     with col_r3:
-                        st.metric("异常比例", f"{info['anomaly_ratio']*100:.1f}%",
-                                 help="异常样本占总样本的比例")
+                        st.metric(t('ml.anomaly_ratio'), f"{info['anomaly_ratio']*100:.1f}%",
+                                 help=t('ml.anomaly_ratio_help'))
 
                 except Exception as e:
-                    st.error(f"❌ 异常检测失败: {str(e)}")
+                    st.error(t('ml.anomaly_detection_failed', error=str(e)))
 
         # 异常检测可视化和统计（只在有异常检测结果时显示）
         if 'ml_anomaly_labels' in st.session_state and 'ml_features_df' in st.session_state:
             st.markdown("---")
-            with st.expander("📊 异常检测可视化与统计", expanded=True):
-                st.caption("可视化异常样本分布并分析异常特征")
+            with st.expander(t('ml.anomaly_visualization_stats'), expanded=True):
+                st.caption(t('ml.visualize_anomaly_distribution'))
 
                 # 异常统计分析
-                st.write("**异常特征统计**")
-                st.caption("对比正常样本和异常样本的特征差异")
+                st.write(t('ml.anomaly_feature_statistics'))
+                st.caption(t('ml.compare_normal_anomaly_features'))
 
                 try:
                     ml_anomaly_labels = st.session_state['ml_anomaly_labels']
@@ -2433,16 +2988,16 @@ with tab6:
                         hide_index=True
                     )
 
-                    st.caption("💡 difference列表示正常样本和异常样本在该特征上的均值差异，值越大表示该特征越能区分正常和异常样本")
+                    st.caption(t('ml.difference_column_explanation'))
 
                 except Exception as e:
-                    st.error(f"❌ 统计分析失败: {str(e)}")
+                    st.error(t('ml.statistical_analysis_failed', error=str(e)))
 
             st.markdown("---")
 
             # 算法可视化
-            st.write("**算法可视化**")
-            st.caption("展示异常检测算法的工作原理和检测结果")
+            st.write(t('ml.algorithm_visualization'))
+            st.caption(t('ml.show_algorithm_principle'))
 
             try:
                 ml_anomaly_info = st.session_state['ml_anomaly_info']
@@ -2478,16 +3033,16 @@ with tab6:
                     svg_buffer.seek(0)
                     svg_str = svg_buffer.getvalue().decode('utf-8')
                     st.components.v1.html(svg_str, height=900, scrolling=True)
-                    st.caption("💡 左上：样本分布（PCA降维）| 右上：异常分数分布 | 左下：异常分数热图 | 右下：统计信息")
-                    st.info(f"🎨 当前使用SVG矢量图显示（{n_samples}个样本），支持无限放大而不失真")
+                    st.caption(t('ml.visualization_layout_caption'))
+                    st.info(t('ml.svg_vector_display', n_samples=n_samples))
                 else:
                     # 数据点多于10000，使用PNG栅格图（避免浏览器卡顿）
                     st.pyplot(fig)
-                    st.caption("💡 左上：样本分布（PCA降维）| 右上：异常分数分布 | 左下：异常分数热图 | 右下：统计信息")
-                    st.info(f"📊 当前使用PNG栅格图显示（{n_samples}个样本），避免浏览器卡顿。下载SVG格式可获得矢量图")
+                    st.caption(t('ml.visualization_layout_caption'))
+                    st.info(t('ml.png_raster_display', n_samples=n_samples))
 
                 # 下载按钮
-                st.write("**下载可视化图片**")
+                st.write(t('ml.download_visualization'))
                 col_dl1, col_dl2, col_dl3 = st.columns(3)
 
                 with col_dl1:
@@ -2496,7 +3051,7 @@ with tab6:
                     fig.savefig(png_buffer, format='png', dpi=300, bbox_inches='tight')
                     png_buffer.seek(0)
                     st.download_button(
-                        "📥 下载PNG",
+                        t('ml.download_png'),
                         data=png_buffer,
                         file_name=f"anomaly_{method.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
                         mime="image/png",
@@ -2509,7 +3064,7 @@ with tab6:
                     fig.savefig(svg_buffer, format='svg', bbox_inches='tight')
                     svg_buffer.seek(0)
                     st.download_button(
-                        "📥 下载SVG",
+                        t('ml.download_svg'),
                         data=svg_buffer,
                         file_name=f"anomaly_{method.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.svg",
                         mime="image/svg+xml",
@@ -2522,7 +3077,7 @@ with tab6:
                     fig.savefig(pdf_buffer, format='pdf', bbox_inches='tight')
                     pdf_buffer.seek(0)
                     st.download_button(
-                        "📥 下载PDF",
+                        t('ml.download_pdf'),
                         data=pdf_buffer,
                         file_name=f"anomaly_{method.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
                         mime="application/pdf",
@@ -2530,26 +3085,26 @@ with tab6:
                     )
 
             except Exception as e:
-                st.error(f"❌ 算法可视化失败: {str(e)}")
+                st.error(t('ml.algorithm_visualization_failed', error=str(e)))
 
             st.markdown("---")
 
             # 降维可视化
-            st.write("**异常样本可视化**")
+            st.write(t('ml.anomaly_sample_visualization'))
             col_viz_method_anomaly, col_viz_param_anomaly = st.columns([1, 2])
 
             with col_viz_method_anomaly:
                 ml_viz_method_anomaly = st.selectbox(
-                    "降维方法",
+                    t('ml.dimensionality_reduction_method'),
                     ["PCA", "t-SNE", "UMAP"],
                     key="ml_viz_method_anomaly",
-                    help="使用降维方法将高维特征投影到2D空间"
+                    help=t('ml.dimensionality_reduction_help')
                 )
 
             with col_viz_param_anomaly:
                 if ml_viz_method_anomaly == "t-SNE":
                     ml_perplexity_anomaly = st.slider(
-                        "困惑度(perplexity)",
+                        t('ml.perplexity'),
                         5, 50, 30, 5,
                         key="ml_perplexity_anomaly"
                     )
@@ -2557,20 +3112,20 @@ with tab6:
                     col_n, col_d = st.columns(2)
                     with col_n:
                         ml_n_neighbors_anomaly = st.slider(
-                            "邻居数量",
+                            t('ml.n_neighbors'),
                             5, 50, 15, 5,
                             key="ml_n_neighbors_anomaly"
                         )
                     with col_d:
                         ml_min_dist_anomaly = st.slider(
-                            "最小距离",
+                            t('ml.min_distance'),
                             0.0, 0.99, 0.1, 0.05,
                             key="ml_min_dist_anomaly"
                         )
 
             # 执行可视化
-            if st.button("🎨 生成异常检测可视化", type="secondary", use_container_width=True, key="ml_viz_anomaly_button"):
-                with st.spinner(f"正在执行{ml_viz_method_anomaly}降维..."):
+            if st.button(t('ml.generate_anomaly_visualization'), type="secondary", use_container_width=True, key="ml_viz_anomaly_button"):
+                with st.spinner(t('ml.executing_dimensionality_reduction', method=ml_viz_method_anomaly)):
                     try:
                         ml_features_df = st.session_state['ml_features_df']
                         ml_anomaly_labels = st.session_state['ml_anomaly_labels']
@@ -2592,7 +3147,7 @@ with tab6:
                             'component_2': components[:, 1],
                             'anomaly_label': ml_anomaly_labels
                         })
-                        viz_df_anomaly['status'] = viz_df_anomaly['anomaly_label'].map({1: '正常', -1: '异常'})
+                        viz_df_anomaly['status'] = viz_df_anomaly['anomaly_label'].map({1: t('ml.normal'), -1: t('ml.anomaly')})
 
                         # 添加特征用于hover
                         if 'sequential_id' in ml_features_df.columns:
@@ -2609,11 +3164,11 @@ with tab6:
                             y='component_2',
                             color='status',
                             hover_data=['sequential_id', 'area_um2', 'circularity'] if 'sequential_id' in viz_df_anomaly.columns else None,
-                            title=f'异常检测可视化 ({ml_viz_method_anomaly})',
+                            title=t('ml.anomaly_detection_visualization_title', method=ml_viz_method_anomaly),
                             labels={'component_1': f'{ml_viz_method_anomaly}1',
                                    'component_2': f'{ml_viz_method_anomaly}2',
-                                   'status': '样本状态'},
-                            color_discrete_map={'正常': '#2ecc71', '异常': '#e74c3c'}
+                                   'status': t('ml.sample_status')},
+                            color_discrete_map={t('ml.normal'): '#2ecc71', t('ml.anomaly'): '#e74c3c'}
                         )
 
                         fig.update_traces(marker=dict(size=8, opacity=0.7))
@@ -2621,10 +3176,10 @@ with tab6:
 
                         st.plotly_chart(fig, use_container_width=True)
 
-                        st.success(f"✅ {ml_viz_method_anomaly}可视化完成！")
+                        st.success(t('ml.visualization_completed', method=ml_viz_method_anomaly))
 
                         # 下载按钮
-                        st.write("**下载可视化图片**")
+                        st.write(t('ml.download_visualization'))
                         col_dl_plotly1, col_dl_plotly2, col_dl_plotly3 = st.columns(3)
 
                         with col_dl_plotly1:
@@ -2633,12 +3188,12 @@ with tab6:
                             fig.write_html(html_buffer)
                             html_str = html_buffer.getvalue()
                             st.download_button(
-                                "📥 下载HTML（交互式）",
+                                t('ml.download_html_interactive'),
                                 data=html_str,
                                 file_name=f"anomaly_viz_{ml_viz_method_anomaly}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
                                 mime="text/html",
                                 use_container_width=True,
-                                help="下载交互式HTML文件，可在浏览器中打开"
+                                help=t('ml.download_html_help')
                             )
 
                         with col_dl_plotly2:
@@ -2646,36 +3201,36 @@ with tab6:
                             try:
                                 png_bytes = fig.to_image(format="png", width=1200, height=800)
                                 st.download_button(
-                                    "📥 下载PNG",
+                                    t('ml.download_png'),
                                     data=png_bytes,
                                     file_name=f"anomaly_viz_{ml_viz_method_anomaly}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
                                     mime="image/png",
                                     use_container_width=True
                                 )
                             except Exception as e:
-                                st.caption("⚠️ PNG导出需要安装kaleido包")
+                                st.caption(t('ml.kaleido_required_png'))
 
                         with col_dl_plotly3:
                             # SVG格式
                             try:
                                 svg_bytes = fig.to_image(format="svg", width=1200, height=800)
                                 st.download_button(
-                                    "📥 下载SVG",
+                                    t('ml.download_svg'),
                                     data=svg_bytes,
                                     file_name=f"anomaly_viz_{ml_viz_method_anomaly}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.svg",
                                     mime="image/svg+xml",
                                     use_container_width=True
                                 )
                             except Exception as e:
-                                st.caption("⚠️ SVG导出需要安装kaleido包")
+                                st.caption(t('ml.kaleido_required_svg'))
 
                     except Exception as e:
-                        st.error(f"❌ 可视化失败: {str(e)}")
+                        st.error(t('ml.visualization_failed', error=str(e)))
 
     # 结果导出section（只在有聚类或异常检测结果时显示）
     if 'ml_features_df_clustered' in st.session_state or 'ml_features_df_anomaly' in st.session_state:
         st.markdown("---")
-        st.subheader("💾 导出结果")
+        st.subheader(t('ml.export_results'))
 
         # 聚类结果导出
         if 'ml_features_df_clustered' in st.session_state:
@@ -2687,17 +3242,17 @@ with tab6:
                 # 导出带聚类标签的CSV
                 csv_data = ml_features_df_clustered.to_csv(index=False)
                 st.download_button(
-                    "📥 下载带聚类标签的CSV",
+                    t('ml.download_clustered_csv'),
                     data=csv_data,
                     file_name=f"clustered_features_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
                     use_container_width=True,
-                    help="下载包含聚类标签的完整特征数据"
+                    help=t('ml.download_clustered_csv_help')
                 )
 
             with col_export2:
                 # 显示数据预览
-                st.info(f"📊 聚类数据: {len(ml_features_df_clustered)} 个细胞，{len(ml_features_df_clustered.columns)} 个特征列")
+                st.info(t('ml.clustered_data_info', cells=len(ml_features_df_clustered), features=len(ml_features_df_clustered.columns)))
 
         # 异常检测结果导出
         if 'ml_features_df_anomaly' in st.session_state:
@@ -2709,19 +3264,19 @@ with tab6:
                 # 导出带异常标签的CSV
                 csv_data_anomaly = ml_features_df_anomaly.to_csv(index=False)
                 st.download_button(
-                    "📥 下载带异常标签的CSV",
+                    t('ml.download_anomaly_csv'),
                     data=csv_data_anomaly,
                     file_name=f"anomaly_features_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
                     use_container_width=True,
-                    help="下载包含异常检测标签的完整特征数据"
+                    help=t('ml.download_anomaly_csv_help')
                 )
 
             with col_export4:
                 # 显示数据预览
                 n_normal = (ml_features_df_anomaly['anomaly'] == 1).sum()
                 n_anomaly = (ml_features_df_anomaly['anomaly'] == -1).sum()
-                st.info(f"📊 异常检测数据: {len(ml_features_df_anomaly)} 个细胞 (正常: {n_normal}, 异常: {n_anomaly})")
+                st.info(t('ml.anomaly_data_info', cells=len(ml_features_df_anomaly), normal=n_normal, anomaly=n_anomaly))
 
             # 导出仅正常样本的CSV
             st.write("")
@@ -2732,25 +3287,25 @@ with tab6:
                 ml_features_df_normal = ml_features_df_anomaly[ml_features_df_anomaly['anomaly'] == 1].copy()
                 csv_data_normal = ml_features_df_normal.to_csv(index=False)
                 st.download_button(
-                    "✅ 下载仅正常样本的CSV",
+                    t('ml.download_normal_only_csv'),
                     data=csv_data_normal,
                     file_name=f"normal_features_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
                     use_container_width=True,
-                    help="下载仅包含正常样本的特征数据（排除异常样本）"
+                    help=t('ml.download_normal_only_csv_help')
                 )
 
             with col_export6:
-                st.caption(f"💡 正常样本数据包含 {len(ml_features_df_normal)} 个细胞（已排除 {n_anomaly} 个异常样本）")
+                st.caption(t('ml.normal_samples_info', cells=len(ml_features_df_normal), anomaly=n_anomaly))
 
     else:
-        st.info("👆 请上传细胞特征CSV文件开始分析")
+        st.info(t('common.please_upload_above'))
 
 # ==================== 标签页7: 聚类分析 ====================
 with tab7:
-    st.header("📊 聚类分析")
-    st.caption("上传细胞特征CSV文件进行聚类分析，自动发现细胞亚群")
-    st.info("💡 使用说明请查看页面顶部的 📖 使用说明")
+    st.header(t('ml.clustering_analysis_title'))
+    st.caption(t('ml.clustering_analysis_caption'))
+    st.info(t('messages.usage_instructions_see_top'))
 
     st.markdown("---")
 
@@ -2759,14 +3314,14 @@ with tab7:
 
     with col_upload:
         uploaded_csv = st.file_uploader(
-            "上传细胞特征CSV文件",
+            t('ml.upload_clustering_csv'),
             type=['csv'],
             key="clustering_csv_upload",
-            help="上传包含细胞形态学特征的CSV文件"
+            help=t('ml.upload_clustering_csv_help')
         )
 
     with col_info:
-        st.info("📋 CSV文件应包含细胞的形态学特征（面积、圆度、长轴、短轴等）")
+        st.info(t('ml.csv_should_contain_morphology'))
 
     # 读取CSV文件
     if uploaded_csv is not None:
@@ -2774,15 +3329,15 @@ with tab7:
             import pandas as pd
             clustering_features_df = pd.read_csv(uploaded_csv)
 
-            st.success(f"✅ 成功读取CSV文件！共 {len(clustering_features_df)} 个细胞样本")
+            st.success(t('ml.csv_read_success_clustering', count=len(clustering_features_df)))
 
             # 显示数据预览
-            with st.expander("📊 数据预览", expanded=False):
-                st.write(f"**数据维度**: {clustering_features_df.shape[0]} 行 × {clustering_features_df.shape[1]} 列")
+            with st.expander(t('ml.data_preview'), expanded=False):
+                st.write(t('ml.data_dimensions', rows=clustering_features_df.shape[0], cols=clustering_features_df.shape[1]))
                 st.dataframe(clustering_features_df.head(10), use_container_width=True)
 
                 # 显示特征列表
-                st.write("**特征列表**:")
+                st.write(t('ml.feature_list'))
                 feature_cols = [col for col in clustering_features_df.columns if col not in ['cell_id', 'sequential_id', 'image_name']]
                 st.write(", ".join(feature_cols))
 
@@ -2790,76 +3345,82 @@ with tab7:
             st.session_state['clustering_features_df'] = clustering_features_df
 
         except Exception as e:
-            st.error(f"❌ 读取CSV文件失败: {str(e)}")
-            st.info("请确保上传的是有效的CSV文件")
+            st.error(t('ml.csv_read_failed', error=str(e)))
+            st.info(t('ml.ensure_valid_csv'))
 
     # 聚类分析UI（只在有数据时显示）
     if 'clustering_features_df' in st.session_state and not st.session_state['clustering_features_df'].empty:
         clustering_features_df = st.session_state['clustering_features_df']
 
         st.markdown("---")
-        st.subheader("📊 聚类分析")
+        st.subheader(t('ml.clustering_analysis_subheader'))
 
         # Left-right column layout for clustering
         col_left, col_right = st.columns([2, 3])
 
         with col_left:
-            st.write("**聚类参数设置**")
+            st.write(t('ml.clustering_parameters'))
 
             # Clustering algorithm selection
             clustering_method = st.selectbox(
-                "聚类算法",
-                ["K-means", "DBSCAN", "层次聚类", "GMM"],
+                t('ml.clustering_algorithm'),
+                ["kmeans", "dbscan", "hierarchical", "gmm"],
+                format_func=lambda x: {
+                    "kmeans": "K-means",
+                    "dbscan": "DBSCAN",
+                    "hierarchical": t('ml.hierarchical_clustering'),
+                    "gmm": "GMM"
+                }[x],
                 key="clustering_method",
-                help="选择聚类算法。K-means适合球形簇，DBSCAN适合任意形状，层次聚类生成树状图，GMM是概率聚类"
+                help=t('ml.clustering_algorithm_help')
             )
 
             # Algorithm-specific parameters
-            if clustering_method == "K-means":
+            if clustering_method == "kmeans":
                 col_k, col_auto = st.columns(2)
                 with col_k:
-                    n_clusters = st.number_input("聚类数量", min_value=2, max_value=10, value=3, step=1, key="clustering_n_clusters")
+                    n_clusters = st.number_input(t('ml.n_clusters'), min_value=2, max_value=10, value=3, step=1, key="clustering_n_clusters")
                 with col_auto:
-                    auto_k = st.checkbox("自动检测最佳k值", value=False, key="clustering_auto_k", help="使用轮廓系数自动寻找最佳聚类数量")
+                    auto_k = st.checkbox(t('ml.auto_detect_k'), value=False, key="clustering_auto_k", help=t('ml.auto_detect_k_help'))
 
-            elif clustering_method == "DBSCAN":
+            elif clustering_method == "dbscan":
                 col_eps, col_min = st.columns(2)
                 with col_eps:
-                    eps = st.number_input("邻域半径(eps)", min_value=0.1, max_value=5.0, value=0.5, step=0.1, key="clustering_eps")
-                    auto_eps = st.checkbox("自动估计eps", value=True, key="clustering_auto_eps")
+                    eps = st.number_input(t('ml.eps_radius'), min_value=0.1, max_value=5.0, value=0.5, step=0.1, key="clustering_eps")
+                    auto_eps = st.checkbox(t('ml.auto_estimate_eps'), value=True, key="clustering_auto_eps")
                 with col_min:
-                    min_samples = st.number_input("最小样本数", min_value=2, max_value=20, value=5, step=1, key="clustering_min_samples")
+                    min_samples = st.number_input(t('ml.min_samples'), min_value=2, max_value=20, value=5, step=1, key="clustering_min_samples")
 
-            elif clustering_method == "层次聚类":
+            elif clustering_method == "hierarchical":
                 col_k, col_link = st.columns(2)
                 with col_k:
-                    n_clusters = st.number_input("聚类数量", min_value=2, max_value=10, value=3, step=1, key="clustering_n_clusters_hier")
+                    n_clusters = st.number_input(t('ml.n_clusters'), min_value=2, max_value=10, value=3, step=1, key="clustering_n_clusters_hier")
                 with col_link:
-                    linkage = st.selectbox("链接方法", ["ward", "complete", "average", "single"], key="clustering_linkage")
+                    linkage = st.selectbox(t('ml.linkage_method'), ["ward", "complete", "average", "single"], key="clustering_linkage")
 
-            elif clustering_method == "GMM":
-                n_components = st.number_input("高斯分量数", min_value=2, max_value=10, value=3, step=1, key="clustering_n_components")
+            elif clustering_method == "gmm":
+                n_components = st.number_input(t('ml.n_components_gmm'), min_value=2, max_value=10, value=3, step=1, key="clustering_n_components")
 
             # Execute clustering button
-            if st.button("🚀 执行聚类分析", type="primary", use_container_width=True, key="clustering_execute_button"):
-                with st.spinner("正在执行聚类分析..."):
+            if st.button(t('ml.execute_clustering'), type="primary", use_container_width=True, key="clustering_execute_button"):
+                with st.spinner(t('ml.executing_clustering')):
                     try:
                         # Execute clustering
-                        if clustering_method == "K-means":
+                        if clustering_method == "kmeans":
                             if auto_k:
                                 optimal_results = find_optimal_clusters(clustering_features_df, max_k=10, method='kmeans')
                                 n_clusters = optimal_results['best_k']
-                                st.info(f"🎯 自动检测到最佳聚类数量: k={n_clusters}")
+                                st.info(t('ml.auto_detected_optimal_k', n_clusters=n_clusters))
                             labels, info = perform_kmeans(clustering_features_df, n_clusters=n_clusters)
 
-                        elif clustering_method == "DBSCAN":
+                        elif clustering_method == "dbscan":
                             eps_val = None if auto_eps else eps
                             labels, info = perform_dbscan(clustering_features_df, eps=eps_val, min_samples=min_samples)
 
-                        elif clustering_method == "层次聚类":
+                        elif clustering_method == "hierarchical":
                             labels, info = perform_hierarchical(clustering_features_df, n_clusters=n_clusters, linkage=linkage)
 
-                        elif clustering_method == "GMM":
+                        elif clustering_method == "gmm":
                             labels, info = perform_gmm(clustering_features_df, n_components=n_components)
 
                         # Save clustering results to session_state
@@ -2871,69 +3432,69 @@ with tab7:
                         clustering_features_df_clustered['cluster'] = labels
                         st.session_state['clustering_features_df_clustered'] = clustering_features_df_clustered
 
-                        st.success(f"✅ 聚类分析完成！")
+                        st.success(t('ml.clustering_completed'))
 
                     except Exception as e:
-                        st.error(f"❌ 聚类分析失败: {str(e)}")
+                        st.error(t('ml.clustering_failed', error=str(e)))
 
             # Display clustering results (only when results exist)
             if 'clustering_labels' in st.session_state and 'clustering_info' in st.session_state:
                 st.markdown("---")
-                st.write("**聚类质量指标**")
+                st.write(t('ml.clustering_quality_metrics'))
 
                 info = st.session_state['clustering_info']
                 labels = st.session_state['clustering_labels']
 
                 col_m1, col_m2 = st.columns(2)
                 with col_m1:
-                    st.metric("轮廓系数", f"{info['silhouette_score']:.3f}", help="范围[-1,1]，越接近1表示聚类质量越好")
+                    st.metric(t('ml.silhouette_score'), f"{info['silhouette_score']:.3f}", help=t('ml.silhouette_score_help'))
                 with col_m2:
-                    st.metric("Davies-Bouldin指数", f"{info['davies_bouldin_score']:.3f}", help="越小越好，表示簇间分离度")
+                    st.metric(t('ml.davies_bouldin_score'), f"{info['davies_bouldin_score']:.3f}", help=t('ml.davies_bouldin_score_help'))
 
-                st.write("**聚类统计**")
+                st.write(t('ml.clustering_statistics'))
                 n_clusters_found = len(set(labels)) - (1 if -1 in labels else 0)
-                st.write(f"- 发现 **{n_clusters_found}** 个聚类")
+                st.write(t('ml.discovered_clusters', n_clusters=n_clusters_found))
 
                 if -1 in labels:
                     n_noise = list(labels).count(-1)
-                    st.write(f"- 噪声点: **{n_noise}** 个")
+                    st.write(t('ml.noise_points', n_noise=n_noise))
 
                 cluster_counts = pd.Series(labels).value_counts().sort_index()
                 for cluster_id, count in cluster_counts.items():
                     if cluster_id != -1:
-                        st.write(f"- 聚类 {cluster_id}: **{count}** 个细胞")
+                        st.write(t('ml.cluster_cell_count', cluster_id=cluster_id, count=count))
 
         with col_right:
-            st.write("**聚类可视化**")
+            st.write(t('ml.clustering_visualization'))
 
             # Visualization only when clustering results exist
             if 'clustering_labels' in st.session_state and 'clustering_features_df' in st.session_state:
 
                 # Dimensionality reduction method selection
                 viz_method = st.selectbox(
-                    "降维方法",
+                    t('ml.dimensionality_reduction_method'),
                     ["PCA", "t-SNE", "UMAP"],
                     key="clustering_viz_method",
-                    help="PCA: 快速线性降维; t-SNE: 保留局部结构; UMAP: 保留全局和局部结构"
+                    help=t('ml.dimensionality_reduction_help')
                 )
 
                 # Method-specific parameters
                 if viz_method == "t-SNE":
                     col_perp, col_iter = st.columns(2)
                     with col_perp:
-                        perplexity = st.slider("困惑度", 5, 50, 30, 5, key="clustering_perplexity")
+                        perplexity = st.slider(t('ml.perplexity'), 5, 50, 30, 5, key="clustering_perplexity")
                     with col_iter:
-                        n_iter = st.slider("迭代次数", 250, 2000, 1000, 250, key="clustering_n_iter")
+                        n_iter = st.slider(t('ml.n_iterations'), 250, 2000, 1000, 250, key="clustering_n_iter")
                 elif viz_method == "UMAP":
                     col_neighbors, col_dist = st.columns(2)
                     with col_neighbors:
-                        n_neighbors = st.slider("邻居数量", 5, 50, 15, 5, key="clustering_n_neighbors")
+                        n_neighbors = st.slider(t('ml.n_neighbors'), 5, 50, 15, 5, key="clustering_n_neighbors")
                     with col_dist:
-                        min_dist = st.slider("最小距离", 0.0, 0.99, 0.1, 0.05, key="clustering_min_dist")
+                        min_dist = st.slider(t('ml.min_distance'), 0.0, 0.99, 0.1, 0.05, key="clustering_min_dist")
 
                 # Execute visualization
-                if st.button("🎨 生成可视化", type="secondary", use_container_width=True, key="clustering_viz_button"):
-                    with st.spinner(f"正在执行{viz_method}降维..."):
+                if st.button(t('ml.generate_visualization'), type="secondary", use_container_width=True, key="clustering_viz_button"):
+                    with st.spinner(t('ml.executing_dimensionality_reduction', method=viz_method)):
                         try:
                             clustering_features_df = st.session_state['clustering_features_df']
                             clustering_labels = st.session_state['clustering_labels']
@@ -2968,8 +3529,8 @@ with tab7:
                                 y='component_2',
                                 color='cluster',
                                 hover_data=['sequential_id', 'area_um2', 'circularity'] if 'sequential_id' in viz_df.columns else None,
-                                title=f'细胞聚类可视化 ({viz_method})',
-                                labels={'component_1': f'{viz_method}1', 'component_2': f'{viz_method}2', 'cluster': '聚类'},
+                                title=t('ml.clustering_visualization_title', method=viz_method),
+                                labels={'component_1': f'{viz_method}1', 'component_2': f'{viz_method}2', 'cluster': t('ml.cluster_label')},
                                 color_discrete_sequence=px.colors.qualitative.Set2
                             )
 
@@ -2979,17 +3540,17 @@ with tab7:
                             # Save to session_state for display outside button block
                             st.session_state['clustering_viz_fig'] = fig
 
-                            st.success(f"✅ {viz_method}可视化完成！")
+                            st.success(t('ml.clustering_viz_completed', method=viz_method))
 
                         except Exception as e:
-                            st.error(f"❌ 可视化失败: {str(e)}")
+                            st.error(t('ml.clustering_viz_failed', error=str(e)))
 
                 # Display saved visualization
                 if 'clustering_viz_fig' in st.session_state:
                     st.plotly_chart(st.session_state['clustering_viz_fig'], use_container_width=True, key="clustering_viz_saved")
 
                     # Download buttons
-                    st.write("**下载可视化**")
+                    st.write(t('ml.download_visualization'))
                     col_dl1, col_dl2 = st.columns(2)
 
                     with col_dl1:
@@ -2997,7 +3558,7 @@ with tab7:
                         st.session_state['clustering_viz_fig'].write_html(html_buffer)
                         html_str = html_buffer.getvalue()
                         st.download_button(
-                            "📥 下载HTML",
+                            t('ml.download_html'),
                             data=html_str,
                             file_name=f"clustering_viz_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html",
                             mime="text/html",
@@ -3008,22 +3569,22 @@ with tab7:
                         try:
                             png_bytes = st.session_state['clustering_viz_fig'].to_image(format="png", width=1200, height=800)
                             st.download_button(
-                                "📥 下载PNG",
+                                t('ml.download_png'),
                                 data=png_bytes,
                                 file_name=f"clustering_viz_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
                                 mime="image/png",
                                 use_container_width=True
                             )
                         except:
-                            st.caption("⚠️ PNG导出需要安装kaleido包")
+                            st.caption(t('ml.png_export_requires_kaleido'))
 
             else:
-                st.info("👈 请先在左侧执行聚类分析")
+                st.info(t('ml.please_execute_clustering_first'))
 
         # Export section
         if 'clustering_features_df_clustered' in st.session_state:
             st.markdown("---")
-            st.subheader("💾 导出结果")
+            st.subheader(t('ml.export_results'))
 
             clustering_features_df_clustered = st.session_state['clustering_features_df_clustered']
 
@@ -3032,62 +3593,47 @@ with tab7:
             with col_export1:
                 csv_data = clustering_features_df_clustered.to_csv(index=False)
                 st.download_button(
-                    "📥 下载带聚类标签的CSV",
+                    t('ml.download_clustered_csv'),
                     data=csv_data,
                     file_name=f"clustering_features_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
                     use_container_width=True,
-                    help="下载包含聚类标签的完整特征数据"
+                    help=t('ml.download_clustered_csv_help')
                 )
 
             with col_export2:
-                st.info(f"📊 聚类数据: {len(clustering_features_df_clustered)} 个细胞，{len(clustering_features_df_clustered.columns)} 个特征列")
+                st.info(t('ml.clustered_data_info', cells=len(clustering_features_df_clustered), features=len(clustering_features_df_clustered.columns)))
 
 
     else:
-        st.info("👆 请上传细胞特征CSV文件开始分析")
+        st.info(t('ml.please_upload_csv_clustering'))
 
 # ==================== 标签页5: 细胞形态学提取 ====================
 with tab5:
-    st.header("🔬 细胞形态学特征提取")
+    st.header(t('morphology.header'))
 
-    st.markdown("""
-    ### 功能说明
-
-    本模块提供两种形态学特征提取方式：
-
-    1. **📊 CSV数据处理**：上传已有的特征CSV文件，进行统计分析和可视化
-    2. **🔍 直接特征提取**：上传图像和分割掩码，直接提取形态学特征
-
-    ---
-    """)
+    st.markdown(t('morphology.feature_description'))
 
     # 模式选择
     morphology_mode = st.radio(
-        "选择处理模式",
-        ["📊 CSV数据处理", "🔍 直接特征提取"],
+        t('morphology.select_mode'),
+        [t('morphology.csv_processing'), t('morphology.direct_extraction')],
         horizontal=True,
-        help="选择特征提取的方式"
+        help=t('morphology.select_mode_help')
     )
 
     # ==================== 模式1: CSV数据处理 ====================
-    if morphology_mode == "📊 CSV数据处理":
-        st.subheader("📊 CSV数据处理")
+    if morphology_mode == t('morphology.csv_processing'):
+        st.subheader(t('morphology.csv_processing'))
 
-        st.info("""
-        **使用说明**：
-        - 上传之前导出的细胞特征CSV文件
-        - 系统将自动分析并显示统计信息
-        - 支持特征分布可视化
-        - 可以重新导出处理后的数据
-        """)
+        st.info(t('morphology.csv_usage_instructions'))
 
         # CSV文件上传
         uploaded_csv = st.file_uploader(
-            "上传细胞特征CSV文件",
+            t('morphology.upload_feature_csv'),
             type=["csv"],
             key="morphology_csv_upload",
-            help="上传之前导出的细胞特征CSV文件"
+            help=t('morphology.upload_feature_csv_help')
         )
 
         if uploaded_csv is not None:
@@ -3095,15 +3641,15 @@ with tab5:
                 # 读取CSV文件
                 features_df = pd.read_csv(uploaded_csv)
 
-                st.success(f"✅ 成功加载CSV文件，包含 {len(features_df)} 个细胞的特征数据")
+                st.success(t('morphology.csv_loaded_successfully', count=len(features_df)))
 
                 # 显示数据预览
-                with st.expander("📋 数据预览", expanded=False):
+                with st.expander(t('morphology.data_preview_title'), expanded=False):
                     st.dataframe(features_df.head(10), use_container_width=True)
-                    st.caption(f"显示前10行数据，共 {len(features_df)} 行")
+                    st.caption(t('morphology.showing_first_rows', count=len(features_df)))
 
                 # 特征统计分析
-                st.subheader("📊 特征统计摘要")
+                st.subheader(t('morphology.feature_statistics_summary'))
 
                 # 检查是否包含基础特征列
                 basic_features = ['area_um2', 'circularity', 'major_axis_length', 'minor_axis_length']
@@ -3116,40 +3662,31 @@ with tab5:
                     # 显示关键特征的统计信息
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
-                        st.metric("平均面积", f"{stats['area_um2']['mean']:.1f} μm²")
+                        st.metric(t('morphology.average_area'), f"{stats['area_um2']['mean']:.1f} μm²")
                     with col2:
-                        st.metric("平均圆度", f"{stats['circularity']['mean']:.3f}")
+                        st.metric(t('morphology.average_circularity'), f"{stats['circularity']['mean']:.3f}")
                     with col3:
-                        st.metric("平均长轴", f"{stats['major_axis_length']['mean']:.1f} μm")
+                        st.metric(t('morphology.average_major_axis'), f"{stats['major_axis_length']['mean']:.1f} μm")
                     with col4:
-                        st.metric("平均短轴", f"{stats['minor_axis_length']['mean']:.1f} μm")
+                        st.metric(t('morphology.average_minor_axis'), f"{stats['minor_axis_length']['mean']:.1f} μm")
 
                     # 显示详细统计表格
-                    with st.expander("📈 详细统计信息", expanded=False):
+                    with st.expander(t('morphology.detailed_statistics'), expanded=False):
                         stats_df = pd.DataFrame(stats).T
                         st.dataframe(stats_df.round(3), use_container_width=True)
                 else:
-                    st.warning("⚠️ CSV文件缺少基础特征列，无法显示统计摘要")
+                    st.warning(t('messages.csv_missing_features'))
 
                 # 特征分布可视化
-                st.subheader("📊 特征分布可视化")
+                st.subheader(t('morphology.feature_distribution_visualization'))
 
                 if has_basic_features:
                     # 选择要可视化的特征
                     viz_feature = st.selectbox(
-                        "选择要可视化的特征",
+                        t('morphology.select_feature_to_visualize'),
                         options=['area_um2', 'circularity', 'major_axis_length', 'minor_axis_length',
                                 'perimeter_um', 'eccentricity', 'solidity', 'aspect_ratio'],
-                        format_func=lambda x: {
-                            'area_um2': '面积 (μm²)',
-                            'circularity': '圆度',
-                            'major_axis_length': '长轴长度 (μm)',
-                            'minor_axis_length': '短轴长度 (μm)',
-                            'perimeter_um': '周长 (μm)',
-                            'eccentricity': '离心率',
-                            'solidity': '实心度',
-                            'aspect_ratio': '长宽比'
-                        }.get(x, x)
+                        format_func=lambda x: t(f'morphology.{x}')
                     )
 
                     if viz_feature in features_df.columns:
@@ -3158,15 +3695,15 @@ with tab5:
                             features_df,
                             x=viz_feature,
                             nbins=30,
-                            title=f"{viz_feature} 分布",
+                            title=t('morphology.feature_distribution', feature=viz_feature),
                             labels={viz_feature: viz_feature}
                         )
                         st.plotly_chart(fig, use_container_width=True)
                     else:
-                        st.warning(f"⚠️ 特征 '{viz_feature}' 不存在于CSV文件中")
+                        st.warning(t('morphology.feature_not_found', feature=viz_feature))
 
                 # CSV下载功能
-                st.subheader("💾 导出数据")
+                st.subheader(t('morphology.export_data'))
 
                 col_download1, col_download2 = st.columns(2)
 
@@ -3174,12 +3711,12 @@ with tab5:
                     # 下载原始CSV
                     csv_data = features_df.to_csv(index=False)
                     st.download_button(
-                        "📥 下载CSV文件",
+                        t('morphology.download_csv_file'),
                         data=csv_data,
                         file_name=f"morphology_features_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                         mime="text/csv",
                         use_container_width=True,
-                        help="下载完整的特征数据CSV文件"
+                        help=t('morphology.download_csv_help')
                     )
 
                 with col_download2:
@@ -3187,90 +3724,84 @@ with tab5:
                         # 下载统计摘要
                         stats_csv = pd.DataFrame(stats).T.to_csv()
                         st.download_button(
-                            "📊 下载统计摘要",
+                            t('morphology.download_statistics_summary'),
                             data=stats_csv,
                             file_name=f"morphology_stats_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                             mime="text/csv",
                             use_container_width=True,
-                            help="下载特征统计摘要CSV文件"
+                            help=t('morphology.download_statistics_help')
                         )
 
             except Exception as e:
-                st.error(f"❌ 读取CSV文件时出错: {str(e)}")
-                st.info("请确保上传的是有效的CSV文件，并且包含正确的特征列")
+                st.error(t('morphology.csv_read_error', error=str(e)))
+                st.info(t('morphology.ensure_valid_csv_with_features'))
 
         else:
-            st.info("👆 请上传细胞特征CSV文件开始分析")
+            st.info(t('morphology.please_upload_csv_to_start'))
 
     # ==================== 模式2: 直接特征提取 ====================
-    elif morphology_mode == "🔍 直接特征提取":
-        st.subheader("🔍 直接特征提取")
+    elif morphology_mode == t('morphology.direct_extraction'):
+        st.subheader(t('morphology.direct_extraction'))
 
-        st.info("""
-        **使用说明**：
-        - 上传原始图像和分割掩码
-        - 选择特征提取方式（基础/高级）
-        - 系统将自动提取细胞形态学特征
-        - 支持导出CSV文件
-        """)
+        st.info(t('morphology.direct_extraction_usage'))
 
         col_left, col_right = st.columns([1, 2])
 
         with col_left:
-            st.write("**⚙️ 设置**")
+            st.write(t('morphology.settings'))
 
             # 图像上传
             uploaded_image = st.file_uploader(
-                "上传原始图像",
+                t('morphology.upload_original_image'),
                 type=["png", "jpg", "jpeg", "tif", "tiff"],
                 key="morphology_image_upload",
-                help="上传细胞的原始图像"
+                help=t('morphology.upload_original_image_help')
             )
 
             # 掩码上传
             uploaded_mask = st.file_uploader(
-                "上传分割掩码",
+                t('morphology.upload_segmentation_mask'),
                 type=["png", "jpg", "jpeg", "tif", "tiff"],
                 key="morphology_mask_upload",
-                help="上传分割后的掩码图像（标记图像）"
+                help=t('morphology.upload_mask_help')
             )
 
             # 像素大小设置
-            st.write("**📏 像素大小设置**")
+            st.write(t('morphology.pixel_size_settings'))
             pixel_size_morph = st.number_input(
-                "像素大小 (μm/pixel)",
+                t('morphology.pixel_size_um_per_pixel'),
                 min_value=0.01,
                 max_value=10.0,
                 value=0.65,
                 step=0.01,
                 key="morphology_pixel_size",
-                help="输入显微镜的像素大小，用于计算实际物理尺寸"
+                help=t('morphology.pixel_size_input_help')
             )
 
             # 最小细胞面积设置
             min_area_morph = st.number_input(
-                "最小细胞面积 (像素)",
+                t('morphology.min_cell_area_pixels'),
                 min_value=10,
                 max_value=10000,
                 value=100,
                 step=10,
                 key="morphology_min_area",
-                help="过滤掉小于此面积的区域"
+                help=t('morphology.min_area_filter_help')
             )
 
             # 特征提取选项
-            st.write("**🔬 特征提取选项**")
+            st.write(t('morphology.feature_extraction_options'))
             use_advanced_morph = st.checkbox(
-                "使用高级特征提取",
+                t('morphology.use_advanced_extraction'),
                 value=False,
                 key="morphology_advanced",
-                help="提取更多高级特征（需要原始图像）"
+                help=t('morphology.advanced_extraction_help')
             )
 
             # 高级特征选项
             if use_advanced_morph:
-                with st.expander("🔬 高级特征选项", expanded=True):
-                    include_hu_morph = st.checkbox("Hu矩特征", value=True, key="morphology_hu")
+                with st.expander(t('morphology.advanced_feature_options'), expanded=True):
+                    include_hu_morph = st.checkbox(t('morphology.hu_moments_feature'), value=True, key="morphology_hu")
                     include_intensity_morph = st.checkbox("强度特征", value=True, key="morphology_intensity")
                     include_texture_morph = st.checkbox("纹理特征", value=True, key="morphology_texture")
                     include_boundary_morph = st.checkbox("边界特征", value=True, key="morphology_boundary")
@@ -3278,14 +3809,14 @@ with tab5:
 
             # 提取按钮
             extract_button = st.button(
-                "🚀 开始提取特征",
+                t('morphology.start_feature_extraction'),
                 use_container_width=True,
                 type="primary",
                 disabled=(uploaded_mask is None)
             )
 
         with col_right:
-            st.write("**📊 结果显示**")
+            st.write(t('morphology.results_display'))
 
             if extract_button and uploaded_mask is not None:
                 try:
@@ -3306,11 +3837,11 @@ with tab5:
                     num_cells = len(np.unique(labeled_mask)) - 1  # 减去背景
 
                     if num_cells == 0:
-                        st.warning("⚠️ 掩码中未检测到细胞区域")
+                        st.warning(t('morphology.no_cells_in_mask'))
                     else:
-                        st.info(f"🔍 检测到 {num_cells} 个细胞区域")
+                        st.info(t('morphology.cells_detected_in_mask', count=num_cells))
 
-                        with st.spinner("正在提取细胞特征..."):
+                        with st.spinner(t('morphology.extracting_cell_features')):
                             # 根据用户选择调用不同的特征提取函数
                             if use_advanced_morph:
                                 # 使用高级特征提取（需要原始图像）
@@ -3337,9 +3868,9 @@ with tab5:
                                         include_boundary=include_boundary_morph,
                                         include_advanced_shape=include_advanced_shape_morph
                                     )
-                                    st.success("✅ 高级特征提取完成！")
+                                    st.success(t('morphology.advanced_extraction_completed'))
                                 else:
-                                    st.error("❌ 高级特征提取需要上传原始图像")
+                                    st.error(t('morphology.advanced_extraction_needs_image'))
                                     features_df = None
                             else:
                                 # 使用基础特征提取
@@ -3348,29 +3879,29 @@ with tab5:
                                     pixel_size=pixel_size_morph,
                                     min_area=min_area_morph
                                 )
-                                st.success("✅ 基础特征提取完成！")
+                                st.success(t('morphology.basic_extraction_completed'))
 
                             if features_df is not None and not features_df.empty:
                                 # 显示特征统计
-                                st.subheader("📊 特征统计摘要")
+                                st.subheader(t('morphology.feature_statistics_summary'))
                                 stats = get_feature_statistics(features_df)
 
                                 # 显示关键特征的统计信息
                                 col1, col2, col3, col4 = st.columns(4)
                                 with col1:
-                                    st.metric("平均面积", f"{stats['area_um2']['mean']:.1f} μm²")
+                                    st.metric(t('morphology.average_area'), f"{stats['area_um2']['mean']:.1f} μm²")
                                 with col2:
-                                    st.metric("平均圆度", f"{stats['circularity']['mean']:.3f}")
+                                    st.metric(t('morphology.average_circularity'), f"{stats['circularity']['mean']:.3f}")
                                 with col3:
-                                    st.metric("平均长轴", f"{stats['major_axis_length']['mean']:.1f} μm")
+                                    st.metric(t('morphology.average_major_axis'), f"{stats['major_axis_length']['mean']:.1f} μm")
                                 with col4:
-                                    st.metric("平均短轴", f"{stats['minor_axis_length']['mean']:.1f} μm")
+                                    st.metric(t('morphology.average_minor_axis'), f"{stats['minor_axis_length']['mean']:.1f} μm")
 
                                 # 显示详细特征表格
-                                with st.expander("📋 查看详细特征数据", expanded=False):
+                                with st.expander(t('morphology.view_detailed_features'), expanded=False):
                                     if use_advanced_morph:
                                         # 高级特征模式：显示所有列
-                                        st.caption("💡 **提示**：表格支持横向滚动，可以拖动查看所有列")
+                                        st.caption(t('morphology.table_scroll_hint'))
                                         st.dataframe(features_df.round(3), use_container_width=True, height=400)
                                     else:
                                         # 基础特征模式：只显示主要列
@@ -3380,7 +3911,7 @@ with tab5:
                                         st.dataframe(features_df[display_cols].round(3), use_container_width=True, height=400)
 
                                 # CSV下载功能
-                                st.subheader("💾 导出数据")
+                                st.subheader(t('morphology.export_data'))
 
                                 col_export1, col_export2 = st.columns(2)
 
@@ -3388,35 +3919,634 @@ with tab5:
                                     # 下载特征CSV
                                     csv_data = features_df.to_csv(index=False)
                                     st.download_button(
-                                        "📥 下载特征CSV",
+                                        t('morphology.download_feature_csv'),
                                         data=csv_data,
                                         file_name=f"cell_features_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                                         mime="text/csv",
                                         use_container_width=True,
-                                        help="下载完整的细胞特征数据CSV文件"
+                                        help=t('morphology.download_feature_csv_help')
                                     )
 
                                 with col_export2:
                                     # 下载统计摘要
                                     stats_csv = pd.DataFrame(stats).T.to_csv()
                                     st.download_button(
-                                        "📊 下载统计摘要",
+                                        t('morphology.download_statistics_summary'),
                                         data=stats_csv,
                                         file_name=f"feature_stats_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                                         mime="text/csv",
                                         use_container_width=True,
-                                        help="下载特征统计摘要CSV文件"
+                                        help=t('morphology.download_statistics_help')
                                     )
 
                             else:
-                                st.warning("⚠️ 未能提取到有效的特征数据")
+                                st.warning(t('morphology.no_valid_features_extracted'))
 
                 except Exception as e:
-                    st.error(f"❌ 处理图像时出错: {str(e)}")
-                    st.info("请确保上传的是有效的图像文件")
+                    st.error(t('morphology.image_processing_error', error=str(e)))
+                    st.info(t('morphology.ensure_valid_image_file'))
 
             else:
                 if uploaded_mask is None:
-                    st.info("👆 请上传分割掩码开始特征提取")
+                    st.info(t('messages.please_upload_mask'))
                 else:
-                    st.info("👈 点击左侧的'开始提取特征'按钮")
+                    st.info(t('messages.click_left_extract_button'))
+
+# ==================== 标签页8: 监督学习 ====================
+with tab8:
+    st.header(t('ml.supervised_learning_title'))
+    st.markdown(t('ml.supervised_learning_description'))
+
+    col_left, col_right = st.columns([1, 2])
+
+    with col_left:
+        st.subheader(t('ml.settings_subheader'))
+
+        # 数据上传
+        uploaded_data = st.file_uploader(
+            t('ml.upload_feature_data_csv'),
+            type=["csv"],
+            key="supervised_data_upload",
+            help=t('ml.upload_feature_data_help')
+        )
+
+        if uploaded_data is not None:
+            try:
+                data_df = pd.read_csv(uploaded_data)
+                st.success(t('ml.data_loaded_success', rows=data_df.shape[0], cols=data_df.shape[1]))
+
+                # 显示数据预览
+                with st.expander(t('ml.data_preview'), expanded=False):
+                    st.dataframe(data_df.head(10), use_container_width=True)
+
+                # 目标列选择
+                st.write(t('ml.target_variable_settings'))
+                target_column = st.selectbox(
+                    t('ml.select_target_column'),
+                    options=data_df.columns.tolist(),
+                    index=len(data_df.columns) - 1,
+                    help=t('ml.select_target_column_help')
+                )
+
+                # 任务类型
+                task_type = st.radio(
+                    t('ml.task_type'),
+                    options=["auto", "classification", "regression"],
+                    index=0,
+                    help=t('ml.task_type_help')
+                )
+
+                # 模型选择
+                st.write(t('ml.model_settings'))
+                use_automl = st.checkbox(t('ml.use_automl'), value=True)
+
+                if not use_automl:
+                    model_options = ['random_forest', 'gradient_boosting', 'svm', 'logistic', 'xgboost']
+                    model_name = st.selectbox(t('ml.select_model'), options=model_options)
+                else:
+                    model_name = None
+
+                # 高级设置
+                with st.expander(t('ml.advanced_settings'), expanded=False):
+                    test_size = st.slider(t('ml.test_size'), 0.1, 0.5, 0.2, 0.05)
+                    cv_folds = st.slider(t('ml.cv_folds'), 3, 10, 5, 1)
+
+                    feature_selection = st.selectbox(
+                        t('ml.feature_selection_method'),
+                        options=[None, "correlation", "mutual_info", "rfe", "tree_based"],
+                        index=0
+                    )
+
+                    feature_scaling = st.selectbox(
+                        t('ml.feature_scaling_method'),
+                        options=["standard", "minmax", "robust", None],
+                        index=0
+                    )
+
+                    hyperparameter_tuning = st.checkbox(t('ml.hyperparameter_tuning'), value=False)
+
+                # 训练按钮
+                if st.button(t('ml.start_training'), type="primary", use_container_width=True):
+                    with st.spinner(t('ml.training_model')):
+                        try:
+                            if use_automl:
+                                # AutoML模式
+                                best_model, comparison_df, results = compare_models_automl(
+                                    data_df=data_df,
+                                    target_column=target_column,
+                                    task_type=task_type,
+                                    test_size=test_size,
+                                    feature_selection=feature_selection,
+                                    feature_scaling=feature_scaling,
+                                    cv_folds=cv_folds,
+                                    tune_best=hyperparameter_tuning
+                                )
+
+                                st.session_state['supervised_model'] = best_model
+                                st.session_state['supervised_results'] = results
+                                st.session_state['model_comparison'] = comparison_df
+
+                            else:
+                                # 单模型训练
+                                model, results = train_supervised_model(
+                                    data_df=data_df,
+                                    target_column=target_column,
+                                    task_type=task_type,
+                                    test_size=test_size,
+                                    model_name=model_name,
+                                    feature_selection=feature_selection,
+                                    feature_scaling=feature_scaling,
+                                    hyperparameter_tuning=hyperparameter_tuning,
+                                    cv_folds=cv_folds
+                                )
+
+                                st.session_state['supervised_model'] = model
+                                st.session_state['supervised_results'] = results
+
+                            st.success(t('ml.model_training_completed'))
+
+                        except Exception as e:
+                            st.error(t('ml.training_failed', error=str(e)))
+
+            except Exception as e:
+                st.error(t('ml.data_loading_failed', error=str(e)))
+
+    with col_right:
+        st.subheader(t('ml.training_results'))
+
+        if 'supervised_results' in st.session_state:
+            results = st.session_state['supervised_results']
+
+            # 显示模型信息
+            st.write(t('ml.model_info'))
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric(t('ml.task_type_metric'), results['task_type'])
+            with col2:
+                st.metric(t('ml.model_metric'), results.get('best_model_name', results.get('model_name', 'N/A')))
+            with col3:
+                st.metric(t('ml.n_features_metric'), results['n_features'])
+
+            # 模型对比（AutoML模式）
+            if 'model_comparison' in st.session_state:
+                st.write(t('ml.model_comparison'))
+                st.dataframe(st.session_state['model_comparison'], use_container_width=True)
+
+            # 评估指标
+            st.write(t('ml.evaluation_metrics'))
+            metrics = results['metrics']
+
+            if results['task_type'] == 'classification':
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric(t('metrics.accuracy'), f"{metrics['accuracy']:.4f}")
+                with col2:
+                    st.metric(t('metrics.precision'), f"{metrics['precision']:.4f}")
+                with col3:
+                    st.metric(t('metrics.recall'), f"{metrics['recall']:.4f}")
+                with col4:
+                    st.metric(t('metrics.f1_score'), f"{metrics['f1_score']:.4f}")
+
+                # 混淆矩阵
+                st.write(t('ml.confusion_matrix'))
+                fig_cm = plot_confusion_matrix(
+                    results['y_test'],
+                    results['predictions']
+                )
+                st.pyplot(fig_cm)
+
+            else:
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric(t('metrics.r2_score'), f"{metrics['r2_score']:.4f}")
+                with col2:
+                    st.metric("RMSE", f"{metrics['rmse']:.4f}")
+                with col3:
+                    st.metric("MAE", f"{metrics['mae']:.4f}")
+                with col4:
+                    if metrics.get('mape'):
+                        st.metric("MAPE", f"{metrics['mape']:.4f}")
+
+                # 预测vs实际
+                st.write(t('ml.prediction_vs_actual'))
+                fig_pred = plot_prediction_vs_actual(
+                    results['y_test'],
+                    results['predictions']
+                )
+                st.pyplot(fig_pred)
+
+            # 特征重要性
+            if hasattr(st.session_state['supervised_model'], 'feature_importances_'):
+                st.write(t('ml.feature_importance'))
+                fig_imp = plot_feature_importance(
+                    st.session_state['supervised_model'],
+                    results['feature_names'],
+                    top_n=15
+                )
+                st.pyplot(fig_imp)
+
+            # 模型保存
+            st.write(t('ml.save_model_section'))
+            model_name_save = st.text_input(t('ml.model_name_input'), value="cell_model")
+            if st.button(t('ml.save_model_button'), use_container_width=True):
+                save_path = f"models/{model_name_save}.pkl"
+                success = save_model(
+                    st.session_state['supervised_model'],
+                    save_path,
+                    metadata=results['metrics'],
+                    feature_names=results['feature_names'],
+                    scaler=results.get('scaler'),
+                    task_type=results['task_type']
+                )
+                if success:
+                    st.success(t('ml.model_saved_success', path=save_path))
+                else:
+                    st.error(t('ml.model_save_failed'))
+
+        else:
+            st.info(t('ml.please_upload_and_train'))
+
+# ==================== 标签页9: 主动学习 ====================
+with tab9:
+    st.header(t('ml.active_learning_title'))
+    st.markdown(t('ml.active_learning_description'))
+
+    col_left, col_right = st.columns([1, 2])
+
+    with col_left:
+        st.subheader(t('common.settings'))
+
+        # 数据上传
+        st.write(t('ml.data_upload_section'))
+        uploaded_train = st.file_uploader(
+            t('ml.upload_train_data'),
+            type=["csv"],
+            key="active_train_upload",
+            help=t('ml.upload_train_data_help')
+        )
+
+        uploaded_pool = st.file_uploader(
+            t('ml.upload_pool_data'),
+            type=["csv"],
+            key="active_pool_upload",
+            help=t('ml.upload_pool_data_help')
+        )
+
+        if uploaded_train is not None and uploaded_pool is not None:
+            try:
+                train_df = pd.read_csv(uploaded_train)
+                pool_df = pd.read_csv(uploaded_pool)
+
+                st.success(t('ml.train_set_info', count=train_df.shape[0]))
+                st.success(t('ml.pool_set_info', count=pool_df.shape[0]))
+
+                # 目标列选择
+                st.write("**🎯 目标变量设置**")
+                target_column = st.selectbox(
+                    "选择目标列",
+                    options=train_df.columns.tolist(),
+                    index=len(train_df.columns) - 1,
+                    key="active_target"
+                )
+
+                # 任务类型
+                task_type = st.radio(
+                    t('ml.task_type'),
+                    options=["classification", "regression"],
+                    index=0,
+                    key="active_task"
+                )
+
+                # 策略选择
+                st.write(t('ml.active_learning_strategy_section'))
+                strategy = st.selectbox(
+                    t('ml.sampling_strategy'),
+                    options=["uncertainty", "qbc", "random"],
+                    format_func=lambda x: {
+                        "uncertainty": t('ml.uncertainty_sampling'),
+                        "qbc": t('ml.qbc_sampling'),
+                        "random": t('ml.random_sampling')
+                    }[x]
+                )
+
+                # 模型选择
+                model_name = st.selectbox(
+                    t('ml.base_model'),
+                    options=["random_forest", "gradient_boosting", "svm", "logistic"],
+                    index=0,
+                    key="active_model"
+                )
+
+                # 迭代设置
+                st.write(t('ml.iteration_settings_section'))
+                n_iterations = st.slider(t('ml.n_iterations'), 5, 50, 10, 5)
+                samples_per_iteration = st.slider(t('ml.samples_per_iteration'), 5, 50, 10, 5)
+
+                # 开始主动学习
+                if st.button(t('ml.start_active_learning'), type="primary", use_container_width=True):
+                    with st.spinner(t('ml.executing_active_learning')):
+                        try:
+                            # 分离特征和标签
+                            X_train = train_df.drop(columns=[target_column]).values
+                            y_train = train_df[target_column].values
+                            X_pool = pool_df.drop(columns=[target_column]).values
+                            y_pool = pool_df[target_column].values
+
+                            # 执行主动学习
+                            results = active_learning_workflow(
+                                X_train_initial=X_train,
+                                y_train_initial=y_train,
+                                X_pool=X_pool,
+                                y_pool_true=y_pool,
+                                model_name=model_name,
+                                task_type=task_type,
+                                strategy=strategy,
+                                n_iterations=n_iterations,
+                                samples_per_iteration=samples_per_iteration
+                            )
+
+                            st.session_state['active_results'] = results
+                            st.success(t('messages.active_learning_completed'))
+
+                        except Exception as e:
+                            st.error(t('ml.active_learning_failed', error=str(e)))
+
+            except Exception as e:
+                st.error(t('ml.data_loading_failed', error=str(e)))
+
+    with col_right:
+        st.subheader(t('ml.learning_progress'))
+
+        if 'active_results' in st.session_state:
+            results = st.session_state['active_results']
+
+            # 显示基本信息
+            st.write(t('ml.learning_statistics'))
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric(t('ml.n_iterations'), results['n_iterations'])
+            with col2:
+                st.metric(t('metrics.strategy'), results['strategy'])
+            with col3:
+                st.metric(t('metrics.task_type'), results['task_type'])
+
+            # 学习曲线
+            st.write(t('ml.performance_curve'))
+            fig_traj = plot_optimization_trajectory(results, metric='test_score')
+            st.pyplot(fig_traj)
+
+            # 收敛图
+            st.write(t('ml.convergence_analysis'))
+            fig_conv = plot_convergence(results, show_confidence=True)
+            st.pyplot(fig_conv)
+
+            # 迭代详情
+            with st.expander(t('ml.iteration_details'), expanded=False):
+                metrics_df = pd.DataFrame(results['iteration_metrics'])
+                st.dataframe(metrics_df, use_container_width=True)
+
+            # 最终模型性能
+            st.write(t('ml.final_model_performance'))
+            final_metrics = results['iteration_metrics'][-1]
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric(t('metrics.train_score'), f"{final_metrics['train_score']:.4f}")
+            with col2:
+                st.metric(t('metrics.test_score'), f"{final_metrics['test_score']:.4f}")
+
+        else:
+            st.info(t('ml.please_upload_and_start'))
+
+# ==================== 标签页10: 虚拟筛选 ====================
+with tab10:
+    st.header(t('ml.virtual_screening_title'))
+    st.markdown(t('ml.virtual_screening_description'))
+
+    col_left, col_right = st.columns([1, 2])
+
+    with col_left:
+        st.subheader(t('common.settings'))
+
+        # 模型加载
+        st.write(t('ml.model_loading_section'))
+        model_source = st.radio(
+            t('ml.model_source'),
+            options=["use_current", "upload_saved"],
+            format_func=lambda x: t('ml.use_current_model') if x == "use_current" else t('ml.upload_saved_model'),
+            index=0
+        )
+
+        model_loaded = False
+        model_path = None
+
+        if model_source == "use_current":
+            if 'supervised_model' in st.session_state:
+                st.success(t('messages.model_loaded'))
+                model_loaded = True
+            else:
+                st.warning(t('messages.please_train_model_first'))
+        else:
+            uploaded_model = st.file_uploader(
+                t('ml.upload_model_file'),
+                type=["pkl", "joblib"],
+                key="screening_model_upload"
+            )
+            if uploaded_model is not None:
+                # 保存临时文件
+                import tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.pkl') as tmp_file:
+                    tmp_file.write(uploaded_model.read())
+                    model_path = tmp_file.name
+                st.success(t('messages.model_file_uploaded'))
+                model_loaded = True
+
+        # 数据上传
+        st.write(t('ml.data_upload_section'))
+        uploaded_screen_data = st.file_uploader(
+            t('ml.upload_screening_data'),
+            type=["csv"],
+            key="screening_data_upload",
+            help=t('ml.upload_screening_data_help')
+        )
+
+        if model_loaded and uploaded_screen_data is not None:
+            try:
+                screen_df = pd.read_csv(uploaded_screen_data)
+                st.success(t('ml.screening_data_loaded', count=screen_df.shape[0]))
+
+                # 筛选设置
+                st.write(t('ml.screening_settings_section'))
+                min_confidence = st.slider(
+                    t('ml.min_confidence_threshold'),
+                    0.0, 1.0, 0.7, 0.05,
+                    help=t('ml.min_confidence_threshold_help')
+                )
+
+                top_n = st.number_input(
+                    t('ml.select_top_n_candidates'),
+                    min_value=10,
+                    max_value=1000,
+                    value=100,
+                    step=10
+                )
+
+                ranking_criteria = st.selectbox(
+                    t('ml.ranking_criteria'),
+                    options=["prediction", "confidence", "combined"],
+                    format_func=lambda x: {
+                        "prediction": t('ml.prediction_value'),
+                        "confidence": t('ml.confidence_value'),
+                        "combined": t('ml.combined_score')
+                    }[x]
+                )
+
+                # 开始筛选
+                if st.button(t('ml.start_screening'), type="primary", use_container_width=True):
+                    with st.spinner(t('common.performing_screening')):
+                        try:
+                            if model_source == "use_current":
+                                # 使用session中的模型
+                                model = st.session_state['supervised_model']
+                                results_info = st.session_state['supervised_results']
+
+                                # 手动预测
+                                feature_names = results_info['feature_names']
+                                X_screen = screen_df[feature_names].values
+
+                                # 应用缩放器
+                                if results_info.get('scaler'):
+                                    X_screen = results_info['scaler'].transform(X_screen)
+
+                                # 预测
+                                predictions = model.predict(X_screen)
+                                screen_df['prediction'] = predictions
+
+                                # 计算置信度
+                                if hasattr(model, 'predict_proba'):
+                                    probabilities = model.predict_proba(X_screen)
+                                    confidence = np.max(probabilities, axis=1)
+                                else:
+                                    confidence = np.ones(len(predictions))
+
+                                screen_df['confidence'] = confidence
+                                results_df = screen_df
+
+                            else:
+                                # 使用上传的模型
+                                results_df, info = screen_dataset(
+                                    model_path=model_path,
+                                    data_df=screen_df,
+                                    min_confidence=None,
+                                    return_probabilities=True
+                                )
+
+                            # 过滤和排序
+                            results_df = filter_by_confidence(
+                                results_df,
+                                min_confidence=min_confidence
+                            )
+
+                            results_df = rank_by_prediction(
+                                results_df,
+                                ascending=False
+                            )
+
+                            # 选择Top N
+                            top_candidates = select_top_candidates(
+                                results_df,
+                                n_candidates=top_n,
+                                criteria=ranking_criteria,
+                                confidence_threshold=min_confidence
+                            )
+
+                            st.session_state['screening_results'] = results_df
+                            st.session_state['top_candidates'] = top_candidates
+                            st.success(t('ml.screening_completed', count=len(results_df)))
+
+                        except Exception as e:
+                            st.error(t('ml.screening_failed', error=str(e)))
+                            import traceback
+                            st.error(traceback.format_exc())
+
+            except Exception as e:
+                st.error(t('ml.data_loading_failed', error=str(e)))
+
+    with col_right:
+        st.subheader(t('ml.screening_results'))
+
+        if 'screening_results' in st.session_state:
+            results_df = st.session_state['screening_results']
+            top_candidates = st.session_state.get('top_candidates', results_df.head(100))
+
+            # 统计信息
+            st.write(t('ml.screening_statistics'))
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric(t('ml.total_samples'), len(results_df))
+            with col2:
+                st.metric(t('ml.average_confidence'), f"{results_df['confidence'].mean():.3f}")
+            with col3:
+                st.metric(t('ml.top_candidates'), len(top_candidates))
+
+            # 预测分布
+            st.write(t('ml.prediction_distribution'))
+            fig_pred_dist = plot_prediction_distribution(
+                results_df,
+                task_type='regression'
+            )
+            st.pyplot(fig_pred_dist)
+
+            # 置信度分布
+            st.write(t('ml.confidence_distribution'))
+            fig_conf_dist = plot_confidence_distribution(results_df)
+            st.pyplot(fig_conf_dist)
+
+            # Top候选物可视化
+            st.write(t('ml.top_candidates_visualization'))
+            fig_top = plot_top_candidates(
+                top_candidates,
+                top_n=min(20, len(top_candidates))
+            )
+            st.pyplot(fig_top)
+
+            # 预测vs置信度
+            st.write(t('ml.prediction_vs_confidence'))
+            fig_pred_conf = plot_prediction_vs_confidence(results_df)
+            st.pyplot(fig_pred_conf)
+
+            # 结果表格
+            with st.expander(t('ml.view_detailed_results'), expanded=False):
+                st.dataframe(
+                    top_candidates.round(4),
+                    use_container_width=True,
+                    height=400
+                )
+
+            # 导出结果
+            st.write(t('common.export_results'))
+            col1, col2 = st.columns(2)
+
+            with col1:
+                # 导出所有结果
+                csv_all = results_df.to_csv(index=False)
+                st.download_button(
+                    t('ml.download_all_results'),
+                    data=csv_all,
+                    file_name=f"screening_all_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
+            with col2:
+                # 导出Top候选物
+                csv_top = top_candidates.to_csv(index=False)
+                st.download_button(
+                    t('ml.download_top_candidates'),
+                    data=csv_top,
+                    file_name=f"screening_top_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
+        else:
+            st.info(t('ml.please_load_model_and_upload'))
