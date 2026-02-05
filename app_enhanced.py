@@ -46,7 +46,8 @@ from src.ml.supervised_learning import (
     evaluate_classification, evaluate_regression,
     save_model, load_model,
     plot_feature_importance, plot_confusion_matrix, plot_roc_curves,
-    plot_prediction_vs_actual, plot_residuals, plot_learning_curves
+    plot_prediction_vs_actual, plot_residuals, plot_learning_curves,
+    plot_shap_analysis, plot_cv_scores
 )
 from src.ml.active_learning import (
     active_learning_workflow, uncertainty_sampling, query_by_committee,
@@ -58,11 +59,169 @@ from src.ml.virtual_screening import (
     screen_dataset, batch_screen_files,
     rank_by_prediction, filter_by_confidence, select_top_candidates,
     plot_prediction_distribution, plot_confidence_distribution,
+    plot_prediction_and_confidence,
     plot_top_candidates, plot_prediction_vs_confidence
 )
 
 # 导入i18n翻译模块
 from locales.i18n import t, get_i18n
+
+def display_plot_with_download(fig, title: str, filename: str):
+    """
+    高清展示matplotlib图表并提供下载功能
+
+    Args:
+        fig: matplotlib Figure对象
+        title: 图表标题
+        filename: 下载文件名（不含扩展名）
+    """
+    # 保存为高DPI的PNG
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=300, bbox_inches='tight')
+    buf.seek(0)
+
+    # 展示图片
+    st.image(buf, caption=title, use_container_width=True)
+
+    # 重置buffer以供下载
+    buf.seek(0)
+
+    # 提供下载按钮
+    st.download_button(
+        label=f"📥 下载 {title}",
+        data=buf,
+        file_name=f"{filename}.png",
+        mime="image/png"
+    )
+
+def create_combined_ml_results_plot(results, model):
+    """
+    创建2x2综合ML结果图表
+
+    Args:
+        results: AutoML结果字典
+        model: 训练好的模型
+
+    Returns:
+        fig: matplotlib Figure对象
+    """
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    from sklearn.metrics import confusion_matrix
+
+    # 创建2x2子图布局 - 调整尺寸使比例更和谐
+    fig = plt.figure(figsize=(14, 12), dpi=300)
+    gs = fig.add_gridspec(2, 2, hspace=0.35, wspace=0.3)
+
+    # 1. 混淆矩阵 (左上)
+    ax1 = fig.add_subplot(gs[0, 0])
+    if results['task_type'] == 'classification':
+        cm = confusion_matrix(results['y_test'], results['predictions'])
+        class_names = sorted(set(results['y_test']) | set(results['predictions']))
+        class_names = [str(c) for c in class_names]
+
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax1,
+                   xticklabels=class_names, yticklabels=class_names,
+                   cbar_kws={'label': 'Count', 'shrink': 0.8}, annot_kws={'size': 11})
+        ax1.set_xlabel('Predicted Label', fontsize=9)
+        ax1.set_ylabel('True Label', fontsize=9)
+        ax1.set_title('Confusion Matrix', fontsize=11, fontweight='bold', pad=10)
+        ax1.tick_params(axis='both', labelsize=8)
+
+    # 2. 特征重要性 (右上)
+    ax2 = fig.add_subplot(gs[0, 1])
+    if hasattr(model, 'feature_importances_'):
+        importances = model.feature_importances_
+        indices = np.argsort(importances)[::-1][:15]
+
+        ax2.barh(range(len(indices)), importances[indices], color='steelblue', alpha=0.8)
+        ax2.set_yticks(range(len(indices)))
+        ax2.set_yticklabels([results['feature_names'][i] for i in indices], fontsize=8)
+        ax2.set_xlabel('Importance', fontsize=9)
+        ax2.set_title('Feature Importance (Top 15)', fontsize=11, fontweight='bold', pad=10)
+        ax2.invert_yaxis()
+        ax2.grid(axis='x', alpha=0.3)
+        ax2.tick_params(axis='x', labelsize=8)
+
+    # 3. SHAP分析 (左下)
+    ax3 = fig.add_subplot(gs[1, 0])
+    if 'X_train_scaled' in results:
+        try:
+            import shap
+            explainer = shap.Explainer(model, results['X_train_scaled'][:100])
+            shap_values = explainer(results['X_train_scaled'][:100])
+
+            # 获取SHAP值数组
+            if hasattr(shap_values, 'values'):
+                shap_vals = shap_values.values
+            else:
+                shap_vals = shap_values
+
+            # 处理SHAP值的形状
+            # 对于分类任务，shap_vals是3D: (samples, features, classes)
+            # 需要选择一个类别来绘制原版SHAP图
+            if len(shap_vals.shape) == 3:
+                # 对于二分类，选择正类（索引1）的SHAP值
+                shap_vals_2d = shap_vals[:, :, 1]
+            else:
+                shap_vals_2d = shap_vals
+
+            # 设置当前axes为ax3
+            plt.sca(ax3)
+
+            # 使用原版SHAP summary plot
+            shap.summary_plot(
+                shap_vals_2d,
+                results['X_train_scaled'][:100],
+                feature_names=results['feature_names'],
+                show=False,
+                max_display=10,
+                plot_size=None
+            )
+
+            ax3.set_title('SHAP Feature Importance', fontsize=11, fontweight='bold', pad=10)
+            ax3.set_xlabel('SHAP value (impact on model output)', fontsize=8)
+            ax3.tick_params(axis='both', labelsize=7)
+        except Exception as e:
+            ax3.text(0.5, 0.5, f'SHAP分析失败\n{str(e)}',
+                    ha='center', va='center', fontsize=10)
+            ax3.axis('off')
+    else:
+        ax3.text(0.5, 0.5, 'SHAP分析不可用', ha='center', va='center', fontsize=10)
+        ax3.axis('off')
+
+    # 4. 交叉验证成绩 (右下)
+    ax4 = fig.add_subplot(gs[1, 1])
+    if 'cv_scores_dict' in results and results['cv_scores_dict']:
+        cv_scores_dict = results['cv_scores_dict']
+        models = list(cv_scores_dict.keys())
+        n_models = len(models)
+        n_folds = len(cv_scores_dict[models[0]])
+
+        x = np.arange(n_folds)
+        width = 0.8 / n_models
+        colors = plt.cm.Set3(np.linspace(0, 1, n_models))
+
+        for i, (model_name, scores) in enumerate(cv_scores_dict.items()):
+            offset = (i - n_models/2) * width + width/2
+            bars = ax4.bar(x + offset, scores, width, label=model_name,
+                         color=colors[i], alpha=0.8, edgecolor='black', linewidth=0.3)
+
+        metric_name = 'Accuracy' if results['task_type'] == 'classification' else 'R² Score'
+        ax4.set_xlabel('Fold Number', fontsize=9)
+        ax4.set_ylabel(metric_name, fontsize=9)
+        ax4.set_title(f'Cross-Validation {metric_name}', fontsize=11, fontweight='bold', pad=10)
+        ax4.set_xticks(x)
+        ax4.set_xticklabels([f'Fold {i+1}' for i in range(n_folds)], fontsize=8)
+        ax4.legend(loc='lower right', framealpha=0.9, fontsize=6, ncol=2)
+        ax4.grid(axis='y', alpha=0.3, linestyle='--')
+        ax4.tick_params(axis='y', labelsize=8)
+    else:
+        ax4.text(0.5, 0.5, '交叉验证数据不可用', ha='center', va='center', fontsize=10)
+        ax4.axis('off')
+
+    plt.tight_layout()
+    return fig
 
 def build_help_markdown():
     """构建帮助文档的markdown内容"""
@@ -4107,14 +4266,6 @@ with tab8:
                 with col4:
                     st.metric(t('metrics.f1_score'), f"{metrics['f1_score']:.4f}")
 
-                # 混淆矩阵
-                st.write(t('ml.confusion_matrix'))
-                fig_cm = plot_confusion_matrix(
-                    results['y_test'],
-                    results['predictions']
-                )
-                st.pyplot(fig_cm)
-
             else:
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
@@ -4127,23 +4278,19 @@ with tab8:
                     if metrics.get('mape'):
                         st.metric("MAPE", f"{metrics['mape']:.4f}")
 
-                # 预测vs实际
-                st.write(t('ml.prediction_vs_actual'))
-                fig_pred = plot_prediction_vs_actual(
-                    results['y_test'],
-                    results['predictions']
-                )
-                st.pyplot(fig_pred)
+            # 综合结果可视化（2x2布局）
+            st.write("### 📊 综合结果可视化")
+            st.info("包含混淆矩阵、特征重要性、SHAP分析和交叉验证成绩的综合展示")
 
-            # 特征重要性
-            if hasattr(st.session_state['supervised_model'], 'feature_importances_'):
-                st.write(t('ml.feature_importance'))
-                fig_imp = plot_feature_importance(
-                    st.session_state['supervised_model'],
-                    results['feature_names'],
-                    top_n=15
+            try:
+                fig_combined = create_combined_ml_results_plot(
+                    results,
+                    st.session_state['supervised_model']
                 )
-                st.pyplot(fig_imp)
+                display_plot_with_download(fig_combined, "ML综合结果分析", "ml_combined_results")
+            except Exception as e:
+                st.error(f"综合图表生成失败: {str(e)}")
+
 
             # 模型保存
             st.write(t('ml.save_model_section'))
@@ -4246,6 +4393,14 @@ with tab9:
                 if st.button(t('ml.start_active_learning'), type="primary", use_container_width=True):
                     with st.spinner(t('ml.executing_active_learning')):
                         try:
+                            # 检查目标列是否存在
+                            if target_column not in train_df.columns:
+                                st.error(f"训练数据中未找到目标列 '{target_column}'")
+                                st.stop()
+                            if target_column not in pool_df.columns:
+                                st.error(f"未标注池数据中未找到目标列 '{target_column}'。主动学习模拟需要真实标签来评估模型性能。请上传包含标签列的数据文件。")
+                                st.stop()
+
                             # 分离特征和标签
                             X_train = train_df.drop(columns=[target_column]).values
                             y_train = train_df[target_column].values
@@ -4360,116 +4515,250 @@ with tab10:
                 st.success(t('messages.model_file_uploaded'))
                 model_loaded = True
 
-        # 数据上传
+        # 数据来源选择
         st.write(t('ml.data_upload_section'))
-        uploaded_screen_data = st.file_uploader(
-            t('ml.upload_screening_data'),
-            type=["csv"],
-            key="screening_data_upload",
-            help=t('ml.upload_screening_data_help')
+        data_source = st.radio(
+            "数据来源",
+            options=["upload", "generate"],
+            format_func=lambda x: "上传CSV文件" if x == "upload" else "在线生成虚拟样本",
+            index=0,
+            key="screening_data_source"
         )
 
-        if model_loaded and uploaded_screen_data is not None:
-            try:
-                screen_df = pd.read_csv(uploaded_screen_data)
-                st.success(t('ml.screening_data_loaded', count=screen_df.shape[0]))
+        screen_df = None
 
-                # 筛选设置
-                st.write(t('ml.screening_settings_section'))
-                min_confidence = st.slider(
-                    t('ml.min_confidence_threshold'),
-                    0.0, 1.0, 0.7, 0.05,
-                    help=t('ml.min_confidence_threshold_help')
-                )
+        if data_source == "upload":
+            # 原有的上传功能
+            uploaded_screen_data = st.file_uploader(
+                t('ml.upload_screening_data'),
+                type=["csv"],
+                key="screening_data_upload",
+                help=t('ml.upload_screening_data_help')
+            )
+            if uploaded_screen_data is not None:
+                try:
+                    screen_df = pd.read_csv(uploaded_screen_data)
+                    st.success(t('ml.screening_data_loaded', count=screen_df.shape[0]))
+                except Exception as e:
+                    st.error(f"数据加载失败: {str(e)}")
 
-                top_n = st.number_input(
-                    t('ml.select_top_n_candidates'),
-                    min_value=10,
-                    max_value=1000,
-                    value=100,
-                    step=10
-                )
+        else:  # generate virtual samples
+            # 检查是否有训练好的模型和特征统计信息
+            if model_source == "use_current" and 'supervised_results' in st.session_state:
+                results_info = st.session_state['supervised_results']
+                feature_stats = results_info.get('feature_stats', {})
 
-                ranking_criteria = st.selectbox(
-                    t('ml.ranking_criteria'),
-                    options=["prediction", "confidence", "combined"],
-                    format_func=lambda x: {
-                        "prediction": t('ml.prediction_value'),
-                        "confidence": t('ml.confidence_value'),
-                        "combined": t('ml.combined_score')
-                    }[x]
-                )
+                if not feature_stats:
+                    st.warning("当前模型没有特征统计信息，请重新训练模型或上传数据文件")
+                else:
+                    st.info(f"检测到 {len(feature_stats)} 个特征，请配置虚拟样本生成参数")
 
-                # 开始筛选
-                if st.button(t('ml.start_screening'), type="primary", use_container_width=True):
-                    with st.spinner(t('common.performing_screening')):
-                        try:
-                            if model_source == "use_current":
-                                # 使用session中的模型
-                                model = st.session_state['supervised_model']
-                                results_info = st.session_state['supervised_results']
+                    # 存储用户配置
+                    if 'virtual_sample_config' not in st.session_state:
+                        st.session_state['virtual_sample_config'] = {}
 
-                                # 手动预测
-                                feature_names = results_info['feature_names']
-                                X_screen = screen_df[feature_names].values
+                    # 分类显示特征配置
+                    continuous_features = {k: v for k, v in feature_stats.items() if v['type'] == 'continuous'}
+                    categorical_features = {k: v for k, v in feature_stats.items() if v['type'] == 'categorical'}
 
-                                # 应用缩放器
-                                if results_info.get('scaler'):
-                                    X_screen = results_info['scaler'].transform(X_screen)
+                    # 连续值特征配置
+                    if continuous_features:
+                        with st.expander(f"连续值特征 ({len(continuous_features)}个)", expanded=True):
+                            for feat_name, feat_info in continuous_features.items():
+                                st.markdown(f"**{feat_name}**")
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    min_val = st.number_input(
+                                        "最小值",
+                                        value=float(feat_info['min']),
+                                        key=f"vs_min_{feat_name}"
+                                    )
+                                with col2:
+                                    max_val = st.number_input(
+                                        "最大值",
+                                        value=float(feat_info['max']),
+                                        key=f"vs_max_{feat_name}"
+                                    )
+                                with col3:
+                                    # 计算默认步长（约10个点）
+                                    default_step = (feat_info['max'] - feat_info['min']) / 10
+                                    step_val = st.number_input(
+                                        "步长",
+                                        value=float(default_step),
+                                        min_value=0.0001,
+                                        key=f"vs_step_{feat_name}"
+                                    )
+                                st.session_state['virtual_sample_config'][feat_name] = {
+                                    'type': 'continuous',
+                                    'min': min_val,
+                                    'max': max_val,
+                                    'step': step_val
+                                }
+                                st.divider()
 
-                                # 预测
-                                predictions = model.predict(X_screen)
-                                screen_df['prediction'] = predictions
-
-                                # 计算置信度
-                                if hasattr(model, 'predict_proba'):
-                                    probabilities = model.predict_proba(X_screen)
-                                    confidence = np.max(probabilities, axis=1)
-                                else:
-                                    confidence = np.ones(len(predictions))
-
-                                screen_df['confidence'] = confidence
-                                results_df = screen_df
-
-                            else:
-                                # 使用上传的模型
-                                results_df, info = screen_dataset(
-                                    model_path=model_path,
-                                    data_df=screen_df,
-                                    min_confidence=None,
-                                    return_probabilities=True
+                    # 离散值特征配置
+                    if categorical_features:
+                        with st.expander(f"离散值特征 ({len(categorical_features)}个)", expanded=True):
+                            for feat_name, feat_info in categorical_features.items():
+                                st.markdown(f"**{feat_name}**")
+                                selected_values = st.multiselect(
+                                    "选择要包含的类别",
+                                    options=feat_info['unique_values'],
+                                    default=feat_info['unique_values'],
+                                    key=f"vs_cat_{feat_name}"
                                 )
+                                st.session_state['virtual_sample_config'][feat_name] = {
+                                    'type': 'categorical',
+                                    'values': selected_values
+                                }
+                                st.divider()
 
-                            # 过滤和排序
-                            results_df = filter_by_confidence(
-                                results_df,
-                                min_confidence=min_confidence
-                            )
+                    # 生成虚拟样本按钮
+                    if st.button("生成虚拟样本", type="secondary", use_container_width=True):
+                        config = st.session_state['virtual_sample_config']
+                        try:
+                            # 生成虚拟样本
+                            from itertools import product
 
-                            results_df = rank_by_prediction(
-                                results_df,
-                                ascending=False
-                            )
+                            # 为每个特征生成值列表
+                            feature_values = {}
+                            for feat_name in results_info['feature_names']:
+                                if feat_name in config:
+                                    cfg = config[feat_name]
+                                    if cfg['type'] == 'continuous':
+                                        values = np.arange(cfg['min'], cfg['max'] + cfg['step'], cfg['step'])
+                                        feature_values[feat_name] = values.tolist()
+                                    else:
+                                        feature_values[feat_name] = cfg['values']
 
-                            # 选择Top N
-                            top_candidates = select_top_candidates(
-                                results_df,
-                                n_candidates=top_n,
-                                criteria=ranking_criteria,
-                                confidence_threshold=min_confidence
-                            )
+                            # 计算总样本数
+                            total_samples = 1
+                            for vals in feature_values.values():
+                                total_samples *= len(vals)
 
-                            st.session_state['screening_results'] = results_df
-                            st.session_state['top_candidates'] = top_candidates
-                            st.success(t('ml.screening_completed', count=len(results_df)))
+                            if total_samples > 100000:
+                                st.warning(f"预计生成 {total_samples:,} 个样本，数量过大。请调整参数减少样本数量（建议<100,000）")
+                            elif total_samples == 0:
+                                st.error("无法生成样本，请检查参数配置")
+                            else:
+                                st.info(f"正在生成 {total_samples:,} 个虚拟样本...")
+
+                                # 生成笛卡尔积
+                                keys = list(feature_values.keys())
+                                values_list = [feature_values[k] for k in keys]
+                                combinations = list(product(*values_list))
+
+                                screen_df = pd.DataFrame(combinations, columns=keys)
+                                st.session_state['generated_screen_df'] = screen_df
+                                st.success(f"成功生成 {len(screen_df):,} 个虚拟样本")
 
                         except Exception as e:
-                            st.error(t('ml.screening_failed', error=str(e)))
+                            st.error(f"生成虚拟样本失败: {str(e)}")
                             import traceback
                             st.error(traceback.format_exc())
 
-            except Exception as e:
-                st.error(t('ml.data_loading_failed', error=str(e)))
+                    # 使用已生成的样本
+                    if 'generated_screen_df' in st.session_state:
+                        screen_df = st.session_state['generated_screen_df']
+                        st.info(f"当前虚拟样本集: {len(screen_df):,} 个样本")
+
+            else:
+                st.warning("在线生成虚拟样本需要使用当前训练的模型，请先在监督学习模块训练模型")
+
+        if model_loaded and screen_df is not None:
+            # 筛选设置
+            st.write(t('ml.screening_settings_section'))
+            min_confidence = st.slider(
+                t('ml.min_confidence_threshold'),
+                0.0, 1.0, 0.7, 0.05,
+                help=t('ml.min_confidence_threshold_help')
+            )
+
+            top_n = st.number_input(
+                t('ml.select_top_n_candidates'),
+                min_value=10,
+                max_value=1000,
+                value=100,
+                step=10
+            )
+
+            ranking_criteria = st.selectbox(
+                t('ml.ranking_criteria'),
+                options=["prediction", "confidence", "combined"],
+                format_func=lambda x: {
+                    "prediction": t('ml.prediction_value'),
+                    "confidence": t('ml.confidence_value'),
+                    "combined": t('ml.combined_score')
+                }[x]
+            )
+
+            # 开始筛选
+            if st.button(t('ml.start_screening'), type="primary", use_container_width=True):
+                with st.spinner(t('common.performing_screening')):
+                    try:
+                        if model_source == "use_current":
+                            # 使用session中的模型
+                            model = st.session_state['supervised_model']
+                            results_info = st.session_state['supervised_results']
+
+                            # 手动预测
+                            feature_names = results_info['feature_names']
+                            X_screen = screen_df[feature_names].values
+
+                            # 应用缩放器
+                            if results_info.get('scaler'):
+                                X_screen = results_info['scaler'].transform(X_screen)
+
+                            # 预测
+                            predictions = model.predict(X_screen)
+                            screen_df['prediction'] = predictions
+
+                            # 计算置信度
+                            if hasattr(model, 'predict_proba'):
+                                probabilities = model.predict_proba(X_screen)
+                                confidence = np.max(probabilities, axis=1)
+                            else:
+                                confidence = np.ones(len(predictions))
+
+                            screen_df['confidence'] = confidence
+                            results_df = screen_df
+
+                        else:
+                            # 使用上传的模型
+                            results_df, info = screen_dataset(
+                                model_path=model_path,
+                                data_df=screen_df,
+                                min_confidence=None,
+                                return_probabilities=True
+                            )
+
+                        # 过滤和排序
+                        results_df = filter_by_confidence(
+                            results_df,
+                            min_confidence=min_confidence
+                        )
+
+                        results_df = rank_by_prediction(
+                            results_df,
+                            ascending=False
+                        )
+
+                        # 选择Top N
+                        top_candidates = select_top_candidates(
+                            results_df,
+                            n_candidates=top_n,
+                            criteria=ranking_criteria,
+                            confidence_threshold=min_confidence
+                        )
+
+                        st.session_state['screening_results'] = results_df
+                        st.session_state['top_candidates'] = top_candidates
+                        st.success(t('ml.screening_completed', count=len(results_df)))
+
+                    except Exception as e:
+                        st.error(t('ml.screening_failed', error=str(e)))
+                        import traceback
+                        st.error(traceback.format_exc())
 
     with col_right:
         st.subheader(t('ml.screening_results'))
@@ -4488,31 +4777,32 @@ with tab10:
             with col3:
                 st.metric(t('ml.top_candidates'), len(top_candidates))
 
-            # 预测分布
-            st.write(t('ml.prediction_distribution'))
-            fig_pred_dist = plot_prediction_distribution(
+            # 预测分布和置信度分布（1x2组合图）
+            st.write(t('ml.prediction_distribution') + " & " + t('ml.confidence_distribution'))
+            fig_combined = plot_prediction_and_confidence(
                 results_df,
-                task_type='regression'
+                task_type='classification'
             )
-            st.pyplot(fig_pred_dist)
+            st.pyplot(fig_combined)
 
-            # 置信度分布
-            st.write(t('ml.confidence_distribution'))
-            fig_conf_dist = plot_confidence_distribution(results_df)
-            st.pyplot(fig_conf_dist)
+            # Top候选物可视化 (仅回归任务显示)
+            # 获取任务类型
+            current_task_type = None
+            if 'supervised_results' in st.session_state:
+                current_task_type = st.session_state['supervised_results'].get('task_type')
 
-            # Top候选物可视化
-            st.write(t('ml.top_candidates_visualization'))
-            fig_top = plot_top_candidates(
-                top_candidates,
-                top_n=min(20, len(top_candidates))
-            )
-            st.pyplot(fig_top)
+            if current_task_type != 'classification':
+                st.write(t('ml.top_candidates_visualization'))
+                fig_top = plot_top_candidates(
+                    top_candidates,
+                    top_n=min(20, len(top_candidates))
+                )
+                st.pyplot(fig_top)
 
-            # 预测vs置信度
-            st.write(t('ml.prediction_vs_confidence'))
-            fig_pred_conf = plot_prediction_vs_confidence(results_df)
-            st.pyplot(fig_pred_conf)
+                # 预测vs置信度
+                st.write(t('ml.prediction_vs_confidence'))
+                fig_pred_conf = plot_prediction_vs_confidence(results_df)
+                st.pyplot(fig_pred_conf)
 
             # 结果表格
             with st.expander(t('ml.view_detailed_results'), expanded=False):

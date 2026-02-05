@@ -920,6 +920,7 @@ def train_multiple_models(
             models_to_try = list(REGRESSION_MODELS.keys())
 
     models_dict = {}
+    cv_scores_dict = {}  # 保存每个模型的交叉验证分数
     results = []
 
     for model_name in models_to_try:
@@ -965,6 +966,7 @@ def train_multiple_models(
 
             results.append(result)
             models_dict[model_name] = model
+            cv_scores_dict[model_name] = np.array(train_info['cv_scores'])  # 保存交叉验证分数
 
         except Exception as e:
             logger.error(f"Failed to train {model_name}: {str(e)}")
@@ -981,7 +983,7 @@ def train_multiple_models(
 
     logger.info(f"Trained {len(models_dict)} models successfully")
 
-    return models_dict, comparison_df
+    return models_dict, comparison_df, cv_scores_dict
 
 
 # ============================================================================
@@ -1172,6 +1174,11 @@ def plot_confusion_matrix(
         fig: matplotlib Figure对象
     """
     cm = confusion_matrix(y_true, y_pred)
+
+    # 如果没有提供类别名称，自动从数据中提取
+    if class_names is None:
+        class_names = sorted(set(y_true) | set(y_pred))
+        class_names = [str(c) for c in class_names]
 
     fig, ax = plt.subplots(figsize=(10, 8), dpi=300)
 
@@ -1629,12 +1636,37 @@ def train_supervised_model(
     # 预测
     y_pred = model.predict(X_test_scaled)
 
+    # 计算特征统计信息（用于虚拟样本生成）
+    feature_stats = {}
+    for col in feature_names:
+        col_data = X[col]
+        n_unique = col_data.nunique()
+        # 判断是连续值还是离散值（唯一值少于10个或少于样本数的5%视为离散值）
+        is_categorical = n_unique <= 10 or n_unique < len(col_data) * 0.05
+
+        if is_categorical:
+            feature_stats[col] = {
+                'type': 'categorical',
+                'unique_values': sorted(col_data.unique().tolist()),
+                'n_unique': n_unique
+            }
+        else:
+            feature_stats[col] = {
+                'type': 'continuous',
+                'min': float(col_data.min()),
+                'max': float(col_data.max()),
+                'mean': float(col_data.mean()),
+                'std': float(col_data.std()),
+                'n_unique': n_unique
+            }
+
     # 组装结果
     results = {
         'model': model,
         'task_type': task_type,
         'model_name': model_name,
         'feature_names': feature_names,
+        'feature_stats': feature_stats,
         'scaler': scaler,
         'metrics': metrics,
         'predictions': y_pred,
@@ -1737,7 +1769,7 @@ def compare_models_automl(
         X_test_scaled = X_test.values
 
     # 训练多个模型
-    models_dict, comparison_df = train_multiple_models(
+    models_dict, comparison_df, cv_scores_dict = train_multiple_models(
         X_train_scaled, y_train, X_test_scaled, y_test,
         task_type=task_type, models_to_try=models_to_compare, cv_folds=cv_folds
     )
@@ -1767,12 +1799,39 @@ def compare_models_automl(
     else:
         metrics = evaluate_regression(best_model, X_test_scaled, y_test)
 
+    # 生成预测结果
+    predictions = best_model.predict(X_test_scaled)
+
+    # 计算特征统计信息（用于虚拟样本生成）
+    feature_stats = {}
+    for col in feature_names:
+        col_data = X[col]
+        n_unique = col_data.nunique()
+        is_categorical = n_unique <= 10 or n_unique < len(col_data) * 0.05
+
+        if is_categorical:
+            feature_stats[col] = {
+                'type': 'categorical',
+                'unique_values': sorted(col_data.unique().tolist()),
+                'n_unique': n_unique
+            }
+        else:
+            feature_stats[col] = {
+                'type': 'continuous',
+                'min': float(col_data.min()),
+                'max': float(col_data.max()),
+                'mean': float(col_data.mean()),
+                'std': float(col_data.std()),
+                'n_unique': n_unique
+            }
+
     # 组装结果
     all_results = {
         'best_model': best_model,
         'best_model_name': best_model_name,
         'task_type': task_type,
         'feature_names': feature_names,
+        'feature_stats': feature_stats,
         'scaler': scaler,
         'metrics': metrics,
         'comparison_df': comparison_df,
@@ -1781,10 +1840,131 @@ def compare_models_automl(
         'feature_selection_info': fs_info,
         'n_features': len(feature_names),
         'n_samples_train': len(X_train),
-        'n_samples_test': len(X_test)
+        'n_samples_test': len(X_test),
+        'y_test': y_test,
+        'predictions': predictions,
+        'cv_scores_dict': cv_scores_dict,
+        'X_train_scaled': X_train_scaled
     }
 
     logger.info("AutoML pipeline completed successfully")
 
     return best_model, comparison_df, all_results
+
+
+def plot_shap_analysis(
+    model: Any,
+    X_data: np.ndarray,
+    feature_names: List[str],
+    max_display: int = 20
+) -> plt.Figure:
+    """
+    生成SHAP分析可视化
+
+    Args:
+        model: 训练好的模型
+        X_data: 特征数据（用于计算SHAP值）
+        feature_names: 特征名称列表
+        max_display: 最多显示的特征数量
+
+    Returns:
+        fig: matplotlib Figure对象
+    """
+    try:
+        import shap
+    except ImportError:
+        logger.warning("SHAP library not installed. Please install with: pip install shap")
+        # 返回一个提示图
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.text(0.5, 0.5, 'SHAP library not installed\nPlease install with: pip install shap',
+                ha='center', va='center', fontsize=14)
+        ax.axis('off')
+        return fig
+
+    try:
+        # 创建SHAP explainer
+        explainer = shap.Explainer(model, X_data)
+        shap_values = explainer(X_data)
+
+        # 创建图表
+        fig, ax = plt.subplots(figsize=(12, 8), dpi=300)
+
+        # 生成summary plot
+        shap.summary_plot(shap_values, X_data, feature_names=feature_names,
+                         max_display=max_display, show=False)
+
+        plt.title('SHAP Feature Importance', fontsize=14, fontweight='bold', pad=20)
+        plt.tight_layout()
+
+        return fig
+
+    except Exception as e:
+        logger.error(f"Failed to generate SHAP analysis: {str(e)}")
+        # 返回错误提示图
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.text(0.5, 0.5, f'Failed to generate SHAP analysis\nError: {str(e)}',
+                ha='center', va='center', fontsize=12)
+        ax.axis('off')
+        return fig
+
+
+def plot_cv_scores(
+    cv_scores_dict: Dict[str, np.ndarray],
+    metric_name: str = 'Score'
+) -> plt.Figure:
+    """
+    可视化交叉验证每一折的成绩
+
+    Args:
+        cv_scores_dict: 字典，键为模型名称，值为交叉验证分数数组
+        metric_name: 指标名称
+
+    Returns:
+        fig: matplotlib Figure对象
+    """
+    if not cv_scores_dict:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.text(0.5, 0.5, 'No cross-validation scores available',
+                ha='center', va='center', fontsize=14)
+        ax.axis('off')
+        return fig
+
+    fig, ax = plt.subplots(figsize=(14, 8), dpi=300)
+
+    # 准备数据
+    models = list(cv_scores_dict.keys())
+    n_models = len(models)
+    n_folds = len(cv_scores_dict[models[0]])
+
+    # 设置x轴位置
+    x = np.arange(n_folds)
+    width = 0.8 / n_models
+
+    # 为每个模型绘制柱状图
+    colors = plt.cm.Set3(np.linspace(0, 1, n_models))
+
+    for i, (model_name, scores) in enumerate(cv_scores_dict.items()):
+        offset = (i - n_models/2) * width + width/2
+        bars = ax.bar(x + offset, scores, width, label=model_name,
+                     color=colors[i], alpha=0.8, edgecolor='black', linewidth=0.5)
+
+        # 在柱子上方显示数值
+        for j, (bar, score) in enumerate(zip(bars, scores)):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height,
+                   f'{score:.3f}',
+                   ha='center', va='bottom', fontsize=8, rotation=0)
+
+    # 设置图表属性
+    ax.set_xlabel('Fold Number', fontsize=12, fontweight='bold')
+    ax.set_ylabel(metric_name, fontsize=12, fontweight='bold')
+    ax.set_title(f'Cross-Validation {metric_name} by Fold', fontsize=14, fontweight='bold', pad=20)
+    ax.set_xticks(x)
+    ax.set_xticklabels([f'Fold {i+1}' for i in range(n_folds)])
+    ax.legend(loc='best', framealpha=0.9)
+    ax.grid(axis='y', alpha=0.3, linestyle='--')
+
+    plt.tight_layout()
+
+    return fig
 

@@ -105,3 +105,4 @@ nul
 # Chinese directories (思路 = ideas/notes)
 思路/
 "\346\200\235\350\267\257/"
+models/*.pkl

@@ -420,14 +420,28 @@ def plot_prediction_distribution(
     Returns:
         fig: matplotlib Figure对象
     """
-    fig, ax = plt.subplots(figsize=(10, 6), dpi=300)
-
     predictions = results_df[prediction_col]
 
-    if task_type == 'classification':
+    # 根据类别数量动态调整图表宽度
+    unique_values = np.unique(predictions)
+    n_categories = len(unique_values)
+
+    if task_type == 'classification' or n_categories <= 10:
+        # 分类任务或类别较少时，根据类别数量调整宽度
+        fig_width = max(4, min(10, n_categories * 2))
+    else:
+        fig_width = 10
+
+    fig, ax = plt.subplots(figsize=(fig_width, 6), dpi=300)
+
+    if task_type == 'classification' or n_categories <= 10:
         # 分类任务：条形图
         unique, counts = np.unique(predictions, return_counts=True)
-        ax.bar(unique, counts, color='steelblue', edgecolor='black')
+        x_pos = np.arange(len(unique))
+        bar_width = 0.6
+        ax.bar(x_pos, counts, width=bar_width, color='steelblue', edgecolor='black')
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(unique)
         ax.set_xlabel('Predicted Class', fontsize=12)
         ax.set_ylabel('Count', fontsize=12)
         ax.set_title('Prediction Distribution', fontsize=14, fontweight='bold')
@@ -473,6 +487,65 @@ def plot_confidence_distribution(
     ax.set_title('Confidence Distribution', fontsize=14, fontweight='bold')
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3, axis='y')
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_prediction_and_confidence(
+    results_df: pd.DataFrame,
+    prediction_col: str = 'prediction',
+    confidence_col: str = 'confidence',
+    task_type: str = 'classification'
+) -> plt.Figure:
+    """
+    绘制预测分布和置信度分布的1x2组合图
+
+    Args:
+        results_df: 结果DataFrame
+        prediction_col: 预测列名
+        confidence_col: 置信度列名
+        task_type: 'classification' or 'regression'
+
+    Returns:
+        fig: matplotlib Figure对象
+    """
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5), dpi=300)
+
+    predictions = results_df[prediction_col]
+    confidence = results_df[confidence_col]
+
+    # 左图：预测分布
+    unique_values = np.unique(predictions)
+    n_categories = len(unique_values)
+
+    if task_type == 'classification' or n_categories <= 10:
+        unique, counts = np.unique(predictions, return_counts=True)
+        x_pos = np.arange(len(unique))
+        bar_width = 0.6
+        ax1.bar(x_pos, counts, width=bar_width, color='steelblue', edgecolor='black')
+        ax1.set_xticks(x_pos)
+        ax1.set_xticklabels(unique)
+        ax1.set_xlabel('Predicted Class', fontsize=11)
+    else:
+        ax1.hist(predictions, bins=30, color='steelblue', edgecolor='black', alpha=0.7)
+        ax1.set_xlabel('Predicted Value', fontsize=11)
+
+    ax1.set_ylabel('Frequency', fontsize=11)
+    ax1.set_title('Prediction Distribution', fontsize=12, fontweight='bold')
+    ax1.grid(True, alpha=0.3, axis='y')
+
+    # 右图：置信度分布
+    ax2.hist(confidence, bins=30, color='green', edgecolor='black', alpha=0.7)
+    ax2.axvline(confidence.mean(), color='r', linestyle='--', lw=2,
+                label=f'Mean = {confidence.mean():.3f}')
+    ax2.axvline(confidence.median(), color='orange', linestyle='--', lw=2,
+                label=f'Median = {confidence.median():.3f}')
+    ax2.set_xlabel('Confidence Score', fontsize=11)
+    ax2.set_ylabel('Frequency', fontsize=11)
+    ax2.set_title('Confidence Distribution', fontsize=12, fontweight='bold')
+    ax2.legend(fontsize=9)
+    ax2.grid(True, alpha=0.3, axis='y')
 
     plt.tight_layout()
     return fig

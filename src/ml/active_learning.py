@@ -909,8 +909,8 @@ def plot_convergence(
     # 如果显示置信带，计算移动平均和标准差
     if show_confidence and len(scores) > 3:
         window = min(3, len(scores))
-        moving_avg = pd.Series(scores).rolling(window=window, center=True).mean()
-        moving_std = pd.Series(scores).rolling(window=window, center=True).std()
+        moving_avg = pd.Series(scores).rolling(window=window, center=True, min_periods=1).mean()
+        moving_std = pd.Series(scores).rolling(window=window, center=True, min_periods=1).std()
 
         ax.plot(iterations, moving_avg, '--', linewidth=2, color='orange',
                 label=f'Moving Average (window={window})')
